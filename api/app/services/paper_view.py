@@ -14,6 +14,7 @@ from sqlmodel import Session, select
 
 from app.db.models import AIInsight, Paper, Review, VerosScore
 from app.schemas.paper import PaperDetail, ReviewerVoice, Verdict
+from app.services.dimensions import standardized_dimensions
 
 _VERDICT_VALUES = set(get_args(Verdict))
 
@@ -123,6 +124,7 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
         status = "score_only"
     else:
         status = "ingested_no_score"
+    dimensions = standardized_dimensions(score_row, insight)
 
     return PaperDetail(
         id=paper.id,
@@ -137,10 +139,10 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
         verdict=cast(Verdict, score_row.verdict) if score_row else "Insufficient reviews",
         consensus_strength=consensus_strength,  # type: ignore[arg-type]
         reviewer_count=len(reviewers),
-        novelty=insight.novelty if insight else None,
-        technical=insight.technical if insight else None,
-        clarity=insight.clarity if insight else None,
-        impact=insight.impact if insight else None,
+        novelty=dimensions["novelty"],
+        technical=dimensions["technical"],
+        clarity=dimensions["clarity"],
+        impact=dimensions["impact"],
         tldr=insight.tldr if insight else None,
         deep=list(insight.deep) if insight else [],
         skim=list(insight.skim) if insight else [],
