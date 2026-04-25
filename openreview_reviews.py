@@ -25,7 +25,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 try:
@@ -40,8 +40,9 @@ except ImportError:  # pragma: no cover - only hit before dependency install
 
 
 REVIEW_INVITATION_PATTERN = re.compile(
-    r"(^|/)(Official_Review|Review|.*Review)$", re.IGNORECASE
+    r"(^|/)(Official_Review|Review)$", re.IGNORECASE
 )
+NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,15 @@ class Review:
     created: str | None
     modified: str | None
     content: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ReviewScore:
+    confidence_weighted_rating: float | None
+    average_rating: float | None
+    average_confidence: float | None
+    scored_review_count: int
+    skipped_review_count: int
 
 
 def parse_forum_id(value: str) -> str:
@@ -110,14 +120,16 @@ def invitation_names(note: Any) -> list[str]:
     return [invitation] if invitation else []
 
 
+def is_review_invitation(invitation: str | None) -> bool:
+    return bool(invitation and REVIEW_INVITATION_PATTERN.search(invitation))
+
+
 def looks_like_official_review(note: Any) -> bool:
     invitations = invitation_names(note)
-    if any(REVIEW_INVITATION_PATTERN.search(invitation) for invitation in invitations):
+    if any(is_review_invitation(invitation) for invitation in invitations):
         return True
 
-    content = normalize_content(getattr(note, "content", {}) or {})
-    reviewish_fields = {"review", "summary", "strengths", "weaknesses", "rating"}
-    return bool(reviewish_fields.intersection(content.keys()))
+    return False
 
 
 def note_to_review(note: Any) -> Review:
@@ -129,6 +141,54 @@ def note_to_review(note: Any) -> Review:
         created=timestamp_to_iso(getattr(note, "cdate", None)),
         modified=timestamp_to_iso(getattr(note, "mdate", None)),
         content=normalize_content(getattr(note, "content", {}) or {}),
+    )
+
+
+def parse_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        match = NUMBER_PATTERN.search(value)
+        if match:
+            return float(match.group())
+
+    return None
+
+
+def calculate_review_score(reviews: list[Review]) -> ReviewScore:
+    scored_reviews: list[tuple[float, float]] = []
+    skipped_review_count = 0
+
+    for review in reviews:
+        rating = parse_number(review.content.get("rating"))
+        confidence = parse_number(review.content.get("confidence"))
+        if rating is None or confidence is None or confidence <= 0:
+            skipped_review_count += 1
+            continue
+
+        scored_reviews.append((rating, confidence))
+
+    if not scored_reviews:
+        return ReviewScore(
+            confidence_weighted_rating=None,
+            average_rating=None,
+            average_confidence=None,
+            scored_review_count=0,
+            skipped_review_count=skipped_review_count,
+        )
+
+    rating_total = sum(rating for rating, _ in scored_reviews)
+    confidence_total = sum(confidence for _, confidence in scored_reviews)
+    weighted_total = sum(rating * confidence for rating, confidence in scored_reviews)
+
+    return ReviewScore(
+        confidence_weighted_rating=weighted_total / confidence_total,
+        average_rating=rating_total / len(scored_reviews),
+        average_confidence=confidence_total / len(scored_reviews),
+        scored_review_count=len(scored_reviews),
+        skipped_review_count=skipped_review_count,
     )
 
 
@@ -152,25 +212,49 @@ def paper_title(paper: Any) -> str:
     return paper.id
 
 
-def format_json(paper: Any, reviews: Iterable[Review]) -> str:
+def format_json(paper: Any, reviews: list[Review]) -> str:
+    score = calculate_review_score(reviews)
     payload = {
         "paper": {
             "id": paper.id,
             "title": paper_title(paper),
             "url": f"https://openreview.net/forum?id={paper.id}",
         },
+        "score": score.__dict__,
         "reviews": [review.__dict__ for review in reviews],
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
 def format_markdown(paper: Any, reviews: list[Review]) -> str:
+    score = calculate_review_score(reviews)
     lines = [
         f"# Reviews for {paper_title(paper)}",
         "",
         f"Paper: https://openreview.net/forum?id={paper.id}",
         "",
+        "## Score",
+        "",
     ]
+
+    if score.confidence_weighted_rating is None:
+        lines.extend(
+            [
+                "No confidence-weighted score could be computed from visible official reviews.",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"- confidence-weighted rating: {score.confidence_weighted_rating:.2f}",
+                f"- simple average rating: {score.average_rating:.2f}",
+                f"- average confidence: {score.average_confidence:.2f}",
+                f"- scored reviews: {score.scored_review_count}",
+                f"- skipped reviews: {score.skipped_review_count}",
+                "",
+            ]
+        )
 
     if not reviews:
         lines.append("No official reviews were found or visible to this account.")
