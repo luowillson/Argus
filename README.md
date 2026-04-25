@@ -87,6 +87,43 @@ curl -X POST http://localhost:8000/api/v1/papers/F76bwRSLeK/ingest
 
 ---
 
+## Creating a local database from repo data
+
+The live Postgres database is local machine state and is not pushed to GitHub. The repo does include the source data needed to recreate it locally, including `data/neurips_2025_accepted_reviews.jsonl`, `paper_scores.json`, and `score_scales.json`.
+
+For a fresh clone, each developer should create their own local database:
+
+```bash
+# 1. Start Postgres + Redis from the repo root
+docker compose up -d
+
+# 2. Create API env + install dependencies
+cd api
+cp .env.example .env
+uv sync
+
+# 3. Create database tables and extensions
+uv run alembic upgrade head
+
+# 4. Import the tracked NeurIPS dataset into Postgres
+uv run python scripts/import_neurips_2025.py \
+  --source ../data/neurips_2025_accepted_reviews.jsonl
+```
+
+After import, the website can serve the stored papers directly from Postgres without re-scraping OpenReview.
+
+To test a small sample first:
+
+```bash
+uv run python scripts/import_neurips_2025.py \
+  --source ../data/neurips_2025_accepted_reviews.jsonl \
+  --limit 5
+```
+
+The importer is safe to rerun. It upserts papers, reviews, and scores by ID.
+
+---
+
 ## OpenReview scoring utilities
 
 This repo also includes local scoring tools for OpenReview review data. They can fetch reviews, normalize venue-specific scores, and cache score summaries.
