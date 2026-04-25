@@ -42,6 +42,15 @@ def rating_scale_max_for_paper(paper: Paper) -> int:
     return _DEFAULT_RATING_SCALE_MAX
 
 
+def normalize_rating_to_ten(rating: float, rating_scale_max: int) -> float:
+    if rating_scale_max >= 10:
+        return min(10.0, max(0.0, rating))
+    if rating_scale_max <= 0:
+        return rating
+    rescaled = rating * (10.0 / rating_scale_max)
+    return round(min(10.0, max(0.0, rescaled)) * 2) / 2
+
+
 def _normalize_to_percent(value: float, minimum: float, maximum: float) -> int:
     if maximum <= minimum:
         return 0
