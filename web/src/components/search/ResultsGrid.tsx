@@ -15,13 +15,11 @@ export function ResultsGrid({ papers }: Props) {
   return (
     <div>
       {/* Column header */}
-      <div className="grid grid-cols-[78px_70px_1fr_140px_180px_120px] gap-5 border-b border-rule pb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
+      <div className="grid grid-cols-[92px_minmax(0,1.55fr)_150px_220px] gap-5 border-b border-rule pb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
         <span>Score</span>
-        <span>Grade</span>
         <span>Paper</span>
         <span>Venue</span>
         <span>Metrics</span>
-        <span>Verdict</span>
       </div>
 
       {papers.map((p, i) => (

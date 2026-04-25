@@ -10,7 +10,7 @@ export function MethodologyDialog() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="mt-2 font-sans text-[11px] text-muted underline underline-offset-2 hover:text-ink"
+        className="mt-2 cursor-pointer font-sans text-[11px] text-muted underline underline-offset-2 hover:text-ink"
       >
         How is this scored?
       </button>
@@ -27,7 +27,7 @@ export function MethodologyDialog() {
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="absolute right-5 top-5 font-sans text-[18px] leading-none text-muted hover:text-ink"
+              className="absolute right-5 top-5 cursor-pointer font-sans text-[18px] leading-none text-muted hover:text-ink"
               aria-label="Close"
             >
               ×

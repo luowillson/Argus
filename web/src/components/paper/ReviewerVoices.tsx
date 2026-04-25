@@ -19,7 +19,7 @@ export function ReviewerVoices({ paper }: { paper: Paper }) {
               <div className="flex items-center justify-between font-sans text-[12px] text-muted-2">
                 <span>Reviewer {rv.handle}</span>
                 <span className="font-semibold text-burgundy">
-                  {rv.label} · {rv.rating}/10
+                  {rv.label} · {rv.rating}/{rv.ratingScaleMax ?? 10}
                 </span>
               </div>
               <p className="mt-1.5 font-serif text-[15px] italic leading-[1.6]">

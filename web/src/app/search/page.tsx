@@ -33,7 +33,7 @@ export default async function SearchPage({
           return hay.includes(query.toLowerCase());
         })
       : VEROS_PAPERS;
-    results = [...filtered].sort((a, b) => b.score - a.score);
+    results = [...filtered].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }
 
   return (

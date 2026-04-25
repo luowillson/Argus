@@ -27,7 +27,7 @@ export function adaptPaperOut(dto: PaperOutDTO): Paper {
       "Analysis in progress — score computed from reviewer ratings.",
     venue: dto.venue ?? "Unknown venue",
     citations: 0,
-    score: dto.score ?? 0,
+    score: dto.score,
     grade: dto.grade,
     verdict: asVerdict(dto.verdict),
     novelty: dto.novelty ?? 0,
@@ -53,6 +53,7 @@ export function adaptPaperDetail(dto: PaperDetailDTO): Paper {
   const reviewers: ReviewerVoice[] = dto.reviewers.map((r) => ({
     handle: r.handle,
     rating: Math.round(r.rating),
+    ratingScaleMax: r.rating_scale_max ?? null,
     label: asVerdict(r.label),
     quote: r.quote,
   }));
@@ -66,7 +67,7 @@ export function adaptPaperDetail(dto: PaperDetailDTO): Paper {
       "AI summary in progress — score and reviewer voices below come from real OpenReview data.",
     venue: dto.venue ?? "Unknown venue",
     citations: dto.citations ?? 0,
-    score: dto.score ?? 0,
+    score: dto.score,
     grade: dto.grade,
     verdict: asVerdict(dto.verdict),
     novelty: dto.novelty ?? 0,

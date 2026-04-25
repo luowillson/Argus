@@ -128,6 +128,7 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
             ReviewerVoice(
                 handle=handle,
                 rating=normalized_rating,
+                rating_scale_max=10,
                 label=label,
                 quote=quote,
             )

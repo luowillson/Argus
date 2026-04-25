@@ -17,6 +17,8 @@ type Props = {
 };
 
 export function ScoreBand({ paper, aiReady = true }: Props) {
+  const score = paper.score;
+
   return (
     <section className="mt-7 grid grid-cols-[180px_1fr_200px] items-center gap-8 border-y border-y-rule border-t-[1.5px] border-t-ink py-6">
       <div>
@@ -30,14 +32,20 @@ export function ScoreBand({ paper, aiReady = true }: Props) {
               scoreColor(paper.score),
             )}
           >
-            {paper.score.toFixed(1)}
+            {score !== null ? score.toFixed(1) : "—"}
           </span>
           <span className="font-sans text-[18px] font-normal text-muted">
             / 10
           </span>
         </div>
         <div className="mt-1.5 font-sans text-[13px] text-muted-2">
-          grade <strong className="font-semibold text-ink">{paper.grade}</strong>
+          {score !== null ? (
+            <>
+              grade <strong className="font-semibold text-ink">{paper.grade}</strong>
+            </>
+          ) : (
+            "score pending"
+          )}
         </div>
         <MethodologyDialog />
       </div>

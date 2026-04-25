@@ -39,7 +39,20 @@ export default function RootLayout({
       <body className="min-h-full bg-paper text-ink font-serif">
         <Providers>
           {children}
-          <Toaster position="bottom-right" richColors />
+          <Toaster
+            position="bottom-right"
+            toastOptions={{
+              classNames: {
+                toast:
+                  "border border-rule bg-paper text-ink shadow-[0_10px_28px_rgba(28,24,21,0.14)] font-sans rounded-none",
+                title: "text-[13px] font-medium text-ink",
+                description: "text-[12px] text-muted-2",
+                success: "border-l-[3px] border-l-accept",
+                error: "border-l-[3px] border-l-burgundy",
+                icon: "text-burgundy",
+              },
+            }}
+          />
         </Providers>
       </body>
     </html>
