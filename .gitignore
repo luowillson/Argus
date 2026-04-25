@@ -19,6 +19,7 @@ paper_scores.json
 # Local environment files
 .env
 .env.*
+la-hacks-26/
 
 # Editor and OS files
 .DS_Store
