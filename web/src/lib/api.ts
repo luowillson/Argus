@@ -95,6 +95,24 @@ export async function fetchPaperStatus(
   return PaperStatusSchema.parse(await res.json());
 }
 
+export async function analyzePaper(paperId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/analyze`, {
+    method: "POST",
+  });
+  if (res.ok) return;
+
+  let detail = `AI summary failed ${res.status}`;
+  try {
+    const body = await res.json();
+    if (typeof body?.detail === "string" && body.detail.trim()) {
+      detail = body.detail;
+    }
+  } catch {
+    // Ignore non-JSON error bodies and keep the generic fallback.
+  }
+  throw new Error(detail);
+}
+
 export const PaperOutSchema = z.object({
   id: z.string(),
   title: z.string(),
