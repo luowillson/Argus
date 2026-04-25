@@ -1,0 +1,30 @@
+{
+  "venues": {
+    "NeurIPS.cc/2025/Conference": {
+      "clarity": {
+        "max": 4.0,
+        "min": 1.0
+      },
+      "confidence": {
+        "max": 5.0,
+        "min": 1.0
+      },
+      "originality": {
+        "max": 4.0,
+        "min": 1.0
+      },
+      "quality": {
+        "max": 4.0,
+        "min": 1.0
+      },
+      "rating": {
+        "max": 6.0,
+        "min": 1.0
+      },
+      "significance": {
+        "max": 4.0,
+        "min": 1.0
+      }
+    }
+  }
+}

@@ -1,9 +1,20 @@
 .venv/
 __pycache__/
 *.py[cod]
+*$py.class
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # Generated outputs
-reviews.md
+reviews*.md
+data/
+*.jsonl
+.verify_*
+paper_scores.json
 
 # Local environment files
 .env
@@ -13,3 +24,8 @@ reviews.md
 .DS_Store
 .vscode/
 .idea/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
