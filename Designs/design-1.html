@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Veros Academic2 Preview</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,300;6..72,400;6..72,500;6..72,600;6..72,700&family=Instrument+Serif&family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Serif:wght@300;400;500;600;700&family=Inter+Tight:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    html, body { margin: 0; padding: 0; background: #f0eee9; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    .ab *::-webkit-scrollbar { display: none; }
+    .ab * { scrollbar-width: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="veros-shared.jsx"></script>
+  <script type="text/babel" src="veros-academic2.jsx"></script>
+
+  <script type="text/babel">
+    function Academic2Preview() {
+      const [view, setView] = React.useState('landing');
+
+      const views = {
+        landing: { label: 'Landing', component: window.LandingAcademic2, height: 860 },
+        search: { label: 'Search', component: window.SearchAcademic2, height: 860 },
+        paper: { label: 'Paper', component: window.PaperAcademic2, height: 980 },
+      };
+
+      const active = views[view];
+      const ActiveComponent = active.component;
+
+      return (
+        <div style={{ padding: '16px' }}>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+            {Object.entries(views).map(([key, item]) => (
+              <button
+                key={key}
+                onClick={() => setView(key)}
+                style={{
+                  border: '1px solid #c8b99f',
+                  background: view === key ? '#7a1c1c' : '#fff',
+                  color: view === key ? '#fff' : '#1c1815',
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ border: '1px solid #d8ccba', background: '#fff', overflow: 'hidden', height: active.height }}>
+            <ActiveComponent />
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<Academic2Preview />);
+  </script>
+</body>
+</html>

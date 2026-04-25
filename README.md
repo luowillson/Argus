@@ -1,9 +1,97 @@
-# Argus
+# Veros
 
-Argus fetches OpenReview paper reviews, normalizes venue-specific scores, and
-stores reusable score summaries for use by a future web backend.
+Veros surfaces and distills OpenReview peer reviews. Paste any OpenReview forum URL, get a deterministic **Veros Score (0-10)** plus AI-generated insights: a TL;DR, "read deeply" vs "skim or skip" sections, and verbatim reviewer voices.
 
-## Setup
+---
+
+## Prerequisites
+
+| Tool | Version | Install |
+|---|---|---|
+| Docker Desktop | any recent | [docker.com](https://www.docker.com/products/docker-desktop/) |
+| Node.js + pnpm | Node 20+, pnpm 9+ | `npm i -g pnpm` |
+| Python | 3.12-3.13 | via `uv` below |
+| uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+
+---
+
+## Quick start
+
+### 1. Start Postgres + Redis
+
+```bash
+docker compose up -d
+```
+
+Postgres is exposed on `localhost:5432`, Redis on `localhost:6379`. Data persists in a Docker volume (`pgdata`).
+
+### 2. Set up the API
+
+```bash
+cd api
+cp .env.example .env    # fill in API keys (see Environment variables below)
+uv sync                 # create venv and install all Python deps
+uv run alembic upgrade head   # create tables + pgvector/pg_trgm extensions
+```
+
+Start the API server (hot-reload):
+
+```bash
+uv run uvicorn app.main:app --reload
+# http://localhost:8000
+# http://localhost:8000/docs  (Swagger UI)
+```
+
+### 3. Start the Celery worker
+
+Open a second terminal in `api/`:
+
+```bash
+uv run celery -A app.workers.celery_app:celery_app worker --loglevel=info
+```
+
+The worker handles ingest, LLM analysis, and embedding tasks triggered when you visit an unknown paper URL.
+
+> On macOS, the worker is configured to use Celery's `solo` pool automatically.
+> This avoids `SIGABRT` crashes from native ML dependencies such as
+> `sentence-transformers` / `torch` inside prefork worker processes.
+
+### 4. Start the web app
+
+```bash
+cd web
+pnpm install
+pnpm dev
+# http://localhost:3000
+```
+
+---
+
+## Ingesting your first paper
+
+The easiest way: visit a paper page directly using a real OpenReview forum ID. For example, this ICLR 2024 paper on sparse autoencoders:
+
+```text
+http://localhost:3000/papers/F76bwRSLeK
+```
+
+If the paper isn't in the database the API returns 202, the Celery worker fetches reviews from OpenReview, scores the paper, runs LLM analysis, and the page transitions from skeleton to full view automatically.
+
+**Using the search box:** paste any OpenReview forum URL or forum ID into the landing page search. If the paper is already indexed it appears in results; if not, go to `/papers/<id>` to trigger ingestion.
+
+**Via curl:**
+
+```bash
+curl -X POST http://localhost:8000/api/v1/papers/F76bwRSLeK/ingest
+```
+
+---
+
+## OpenReview scoring utilities
+
+This repo also includes local scoring tools for OpenReview review data. They can fetch reviews, normalize venue-specific scores, and cache score summaries.
+
+### Setup
 
 ```bash
 python3 -m venv .venv
@@ -11,7 +99,7 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-## CLI Usage
+### CLI usage
 
 Fetch full reviews:
 
@@ -19,7 +107,7 @@ Fetch full reviews:
 python openreview_reviews.py <paper_id> --format markdown --output reviews.md
 ```
 
-Search by paper title within a conference:
+Search by paper title within a conference and print score fields:
 
 ```bash
 python openreview_reviews.py \
@@ -48,8 +136,7 @@ Parse every accepted NeurIPS 2025 paper and its reviews into JSONL:
 python scripts/parse_neurips_2025_accepted.py
 ```
 
-The bulk parser sleeps `0.5` seconds between paper requests by default to reduce
-rate-limit risk. For a more conservative run:
+The bulk parser sleeps `0.5` seconds between paper requests by default to reduce rate-limit risk. For a more conservative run:
 
 ```bash
 python scripts/parse_neurips_2025_accepted.py --delay 1.0
@@ -61,7 +148,7 @@ Test the bulk parser on a small sample first:
 python scripts/parse_neurips_2025_accepted.py --limit 5
 ```
 
-## Backend Integration
+### Backend integration
 
 The reusable service API lives in `argus_openreview.service`:
 
@@ -75,5 +162,94 @@ payload = get_score_summary(
 )
 ```
 
-The returned payload is JSON-safe and can be sent directly from a Flask,
-FastAPI, or other backend route to a frontend.
+The returned payload is JSON-safe and can be sent directly from a Flask, FastAPI, or other backend route to a frontend.
+
+---
+
+## Environment variables (`api/.env`)
+
+```text
+DATABASE_URL=postgresql+psycopg://veros:veros@localhost:5432/veros
+REDIS_URL=redis://localhost:6379/0
+
+# LLM provider: "gemini" or "zai"
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=<your key from aistudio.google.com>
+GEMINI_MODEL=gemini-2.5-flash
+
+# Z.AI optional alternative
+ZAI_API_KEY=<your Z.AI key>
+ZAI_BASE_URL=https://api.z.ai/api/paas/v4/
+ZAI_MODEL=glm-5.1
+
+# OpenReview credentials, only needed for auth-gated venues
+OPENREVIEW_USERNAME=
+OPENREVIEW_PASSWORD=
+
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+CORS_ORIGINS=http://localhost:3000
+LOG_LEVEL=INFO
+```
+
+`web/.env.local`:
+
+```text
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
+```
+
+---
+
+## API endpoints
+
+Base: `http://localhost:8000/api/v1`
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | Liveness check |
+| GET | `/stats` | Paper + review counts |
+| GET | `/search?q=&limit=&offset=` | Text + semantic search |
+| GET | `/papers/{id}` | Full paper detail; 202 + enqueue if not ingested |
+| GET | `/papers/{id}/status` | `{ingest, analysis}` status |
+| POST | `/papers/{id}/ingest` | Synchronous ingest |
+| POST | `/papers/{id}/analyze` | Re-run LLM analysis |
+| GET | `/saved` | Demo user's reading list |
+| POST | `/saved` | Save a paper `{paper_id}` |
+| DELETE | `/saved/{id}` | Unsave a paper |
+
+Interactive docs are available at `http://localhost:8000/docs`.
+
+---
+
+## Switching LLM providers
+
+Edit `api/.env`:
+
+```text
+LLM_PROVIDER=gemini
+LLM_PROVIDER=zai
+```
+
+Both use an OpenAI-compatible HTTP interface. Adding a new provider requires implementing one method in `api/app/services/llm/provider.py` and registering it in `factory.py`.
+
+---
+
+## Pages
+
+| URL | Description |
+|---|---|
+| `/` | Landing page with search box and live stats |
+| `/search?q=` | Results grid |
+| `/papers/{id}` | Full paper view |
+| `/saved` | Reading list |
+
+---
+
+## Re-embedding already-ingested papers
+
+After a fresh ingest the embedding task is queued automatically. To manually embed a paper that was ingested before the worker was running:
+
+```bash
+cd api
+uv run celery -A app.workers.celery_app:celery_app call \
+  veros.embed_paper --args='["F76bwRSLeK"]'
+```
