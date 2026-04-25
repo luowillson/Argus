@@ -26,6 +26,14 @@ def ingest_paper_task(self, forum_id: str) -> dict:  # type: ignore[override]
         try:
             result = ingest_paper(db, forum_id)
         except Exception as exc:
+            exc_str = str(exc)
+            # OpenReview 404 / NotFoundError is permanent — don't retry.
+            if "NotFoundError" in exc_str or '"status": 404' in exc_str:
+                logger.error(
+                    "ingest_paper_task: forum %r not found on OpenReview, abandoning",
+                    forum_id,
+                )
+                raise  # fail the task without scheduling retries
             logger.exception("ingest_paper_task failed for %s", forum_id)
             raise self.retry(exc=exc) from exc
 

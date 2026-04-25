@@ -65,13 +65,15 @@ pnpm dev
 
 ## Ingesting your first paper
 
-The easiest way: visit a paper page directly. Navigate to:
+The easiest way: visit a paper page directly using a real OpenReview forum ID. For example, this ICLR 2024 paper on sparse autoencoders:
 
 ```
 http://localhost:3000/papers/F76bwRSLeK
 ```
 
 If the paper isn't in the database the API returns 202, the Celery worker fetches reviews from OpenReview, scores the paper, runs LLM analysis, and the page transitions from skeleton → full view automatically (polls every 2 s).
+
+> **Note:** the forum ID must be a real OpenReview paper ID. Fake IDs will fail immediately (OpenReview returns 404) — this is expected and the task won't retry.
 
 **Using the search box:** paste any OpenReview forum URL or forum ID into the landing page search. If the paper is already indexed it appears in results; if not, go to `/papers/<id>` to trigger ingestion.
 

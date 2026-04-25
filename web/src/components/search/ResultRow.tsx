@@ -1,4 +1,6 @@
-import Link from "next/link";
+"use client";
+
+import { useRouter } from "next/navigation";
 import type { Paper } from "@/lib/types";
 import { cn, scoreColor } from "@/lib/utils";
 import { VerdictPill } from "@/components/brand/VerdictPill";
@@ -10,11 +12,17 @@ type Props = {
 };
 
 export function ResultRow({ paper, isFirst }: Props) {
+  const router = useRouter();
+  const dest = `/papers/${paper.id}`;
+
   return (
-    <Link
-      href={`/papers/${paper.id}`}
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={() => router.push(dest)}
+      onKeyDown={(e) => e.key === "Enter" && router.push(dest)}
       className={cn(
-        "grid items-start gap-5 border-b border-rule-soft py-5 transition hover:bg-paper/60",
+        "grid cursor-pointer items-start gap-5 border-b border-rule-soft py-5 transition hover:bg-cream/40",
         "grid-cols-[78px_70px_1fr_140px_180px_120px]",
         isFirst && "border-t border-rule",
       )}
@@ -95,6 +103,6 @@ export function ResultRow({ paper, isFirst }: Props) {
           </span>
         </div>
       </div>
-    </Link>
+    </div>
   );
 }
