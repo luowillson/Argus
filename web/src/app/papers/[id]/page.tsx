@@ -12,7 +12,7 @@ export default async function PaperPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  let result: Awaited<ReturnType<typeof fetchPaper>> | null = null;
+  let result: Awaited<ReturnType<typeof fetchPaper>> = null;
 
   try {
     result = await fetchPaper(id);
