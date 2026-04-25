@@ -8,19 +8,16 @@ even before the LLM has selected the best quotes.
 
 from __future__ import annotations
 
-import re
 from typing import cast, get_args
 
 from sqlmodel import Session, select
 
 from app.db.models import AIInsight, Paper, Review, VerosScore
 from app.schemas.paper import PaperDetail, ReviewerVoice, Verdict
+from app.services.dimensions import standardized_dimensions
+from app.services.scoring import normalize_rating_to_ten, rating_scale_max_for_paper
 
 _VERDICT_VALUES = set(get_args(Verdict))
-_SCALE_PATTERNS = (
-    re.compile(r"(?:out\s+of|/)\s*(10|6|5)\b", re.IGNORECASE),
-    re.compile(r"\b(?:1\s*[-–]\s*|scale\s+of\s+)(10|6|5)\b", re.IGNORECASE),
-)
 
 
 def _short_handle(signatures: list[str]) -> str:
@@ -34,10 +31,22 @@ def _short_handle(signatures: list[str]) -> str:
     return last[-4:] or "anon"
 
 
-def _coerce_label(value: str | None) -> Verdict:
+def _verdict_from_rating(rating: float) -> Verdict:
+    if rating >= 8.5:
+        return "Strong Accept"
+    if rating >= 7.0:
+        return "Accept"
+    if rating >= 6.0:
+        return "Weak Accept"
+    if rating >= 5.0:
+        return "Borderline"
+    return "Reject"
+
+
+def _coerce_label(value: str | None, rating: float | None = None) -> Verdict:
     """Map an OpenReview recommendation string to one of our Verdict labels."""
     if not value:
-        return "Borderline"
+        return _verdict_from_rating(rating) if rating is not None else "Borderline"
     text = value.lower()
     if "strong" in text and "accept" in text:
         return "Strong Accept"
@@ -57,7 +66,7 @@ def _coerce_label(value: str | None) -> Verdict:
         return "Accept"
     if value in _VERDICT_VALUES:
         return cast(Verdict, value)
-    return "Borderline"
+    return _verdict_from_rating(rating) if rating is not None else "Borderline"
 
 
 def _quote_from_content(content: dict) -> str:
@@ -68,17 +77,6 @@ def _quote_from_content(content: dict) -> str:
             sentence = text.strip().split(". ")[0]
             return (sentence[:240] + "…") if len(sentence) > 240 else sentence
     return ""
-
-
-def _rating_scale_max(content: dict) -> int | None:
-    rating = content.get("rating")
-    if not isinstance(rating, str):
-        return None
-    for pattern in _SCALE_PATTERNS:
-        match = pattern.search(rating)
-        if match:
-            return int(match.group(1))
-    return None
 
 
 def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
@@ -102,6 +100,7 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
 
     reviewers: list[ReviewerVoice] = []
     consensus_labels: list[str] = []
+    rating_scale_max = rating_scale_max_for_paper(paper)
 
     # Prefer LLM-picked verbatim quotes when ai_insights is ready; fall back to
     # the raw-content heuristic so the page still has voices pre-LLM.
@@ -116,7 +115,8 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
         if row.rating is None:
             continue
         handle = _short_handle(row.signatures)
-        label = _coerce_label(row.recommendation)
+        normalized_rating = normalize_rating_to_ten(float(row.rating), rating_scale_max)
+        label = _coerce_label(row.recommendation, normalized_rating)
         consensus_labels.append(label)
         llm_voice = llm_quotes_by_handle.get(handle)
         quote = (
@@ -127,8 +127,8 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
         reviewers.append(
             ReviewerVoice(
                 handle=handle,
-                rating=int(round(float(row.rating))),
-                rating_scale_max=_rating_scale_max(row.content or {}),
+                rating=normalized_rating,
+                rating_scale_max=10,
                 label=label,
                 quote=quote,
             )
@@ -140,6 +140,7 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
         status = "score_only"
     else:
         status = "ingested_no_score"
+    dimensions = standardized_dimensions(score_row, insight)
 
     return PaperDetail(
         id=paper.id,
@@ -154,10 +155,10 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
         verdict=cast(Verdict, score_row.verdict) if score_row else "Insufficient reviews",
         consensus_strength=consensus_strength,  # type: ignore[arg-type]
         reviewer_count=len(reviewers),
-        novelty=insight.novelty if insight else None,
-        technical=insight.technical if insight else None,
-        clarity=insight.clarity if insight else None,
-        impact=insight.impact if insight else None,
+        novelty=dimensions["novelty"],
+        technical=dimensions["technical"],
+        clarity=dimensions["clarity"],
+        impact=dimensions["impact"],
         tldr=insight.tldr if insight else None,
         deep=list(insight.deep) if insight else [],
         skim=list(insight.skim) if insight else [],

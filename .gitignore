@@ -19,6 +19,7 @@ paper_scores.json
 # Local environment files
 .env
 .env.*
+la-hacks-26/
 
 # Editor and OS files
 .DS_Store
@@ -29,3 +30,4 @@ paper_scores.json
 build/
 dist/
 *.egg-info/
+.npm-cache/

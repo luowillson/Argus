@@ -16,10 +16,16 @@ from sqlmodel import Session, select
 
 from app.db.models import AIInsight, Paper, VerosScore
 from app.schemas.paper import ConsensusStrength, PaperOut, Verdict
+from app.services.dimensions import standardized_dimensions
 
 logger = logging.getLogger(__name__)
 
 _CANDIDATE_POOL = 40  # max IDs to collect before re-ranking by score
+
+
+def _has_embeddings(db: Session) -> bool:
+    row = db.execute(sa_text("SELECT EXISTS (SELECT 1 FROM paper_embeddings LIMIT 1)")).first()
+    return bool(row and row[0])
 
 
 def build_paper_out(
@@ -35,6 +41,7 @@ def build_paper_out(
         else "split"
     )
     reviewer_count = int(breakdown.get("n_reviews", 0))
+    dimensions = standardized_dimensions(score_row, insight)
 
     return PaperOut(
         id=paper.id,
@@ -45,10 +52,10 @@ def build_paper_out(
         score=float(score_row.score) if score_row else None,
         grade=score_row.grade if score_row else "—",
         verdict=cast(Verdict, score_row.verdict) if score_row else "Insufficient reviews",
-        novelty=insight.novelty if insight else None,
-        technical=insight.technical if insight else None,
-        clarity=insight.clarity if insight else None,
-        impact=insight.impact if insight else None,
+        novelty=dimensions["novelty"],
+        technical=dimensions["technical"],
+        clarity=dimensions["clarity"],
+        impact=dimensions["impact"],
         tldr=insight.tldr if insight else None,
         consensus=insight.consensus if insight else None,
         consensus_strength=cs,
@@ -86,6 +93,9 @@ def search_papers(
 
         # 2. Semantic vector search (best-effort — skip if provider unavailable).
         try:
+            if not _has_embeddings(db):
+                raise RuntimeError("no paper embeddings indexed")
+
             from app.services.embeddings.factory import get_embedding_provider
 
             provider = get_embedding_provider()
