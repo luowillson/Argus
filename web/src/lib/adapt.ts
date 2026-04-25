@@ -1,4 +1,4 @@
-import type { PaperDetailDTO } from "./api";
+import type { PaperDetailDTO, PaperOutDTO } from "./api";
 import type { Paper, ReviewerVoice, Verdict } from "./types";
 
 const FALLBACK_VERDICT: Verdict = "Borderline";
@@ -15,6 +15,38 @@ function asVerdict(v: string): Verdict {
     default:
       return FALLBACK_VERDICT;
   }
+}
+
+export function adaptPaperOut(dto: PaperOutDTO): Paper {
+  return {
+    id: dto.id,
+    title: dto.title,
+    authors: dto.authors,
+    tldr:
+      dto.tldr ??
+      "Analysis in progress — score computed from reviewer ratings.",
+    venue: dto.venue ?? "Unknown venue",
+    citations: 0,
+    score: dto.score ?? 0,
+    grade: dto.grade,
+    verdict: asVerdict(dto.verdict),
+    novelty: dto.novelty ?? 0,
+    technical: dto.technical ?? 0,
+    clarity: dto.clarity ?? 0,
+    impact: dto.impact ?? 0,
+    consensus: dto.consensus ?? "—",
+    consensusStrength: dto.consensus_strength,
+    deep: [],
+    skim: [],
+    reviewers: [],
+    acceptance:
+      dto.acceptance === "oral" ||
+      dto.acceptance === "poster" ||
+      dto.acceptance === "reject"
+        ? dto.acceptance
+        : null,
+    reviewerCount: dto.reviewer_count,
+  };
 }
 
 export function adaptPaperDetail(dto: PaperDetailDTO): Paper {

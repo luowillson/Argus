@@ -14,6 +14,7 @@ from sqlmodel import Session, delete
 
 from app.config import get_settings
 from app.db.models import Paper, Review
+from app.services.analyze import AnalyzeError, analyze_paper
 from app.services.openreview_client import (
     FetchedPaper,
     FetchedReview,
@@ -111,12 +112,27 @@ def ingest_paper(db: Session, forum_id: str) -> dict[str, object]:
 
     score_result = compute_and_store_score(db, paper.id)
 
+    analyze_status: str
+    analyze_error: str | None = None
+    try:
+        analyze_paper(db, paper.id)
+        analyze_status = "ready"
+    except AnalyzeError as exc:
+        analyze_status = "skipped"
+        analyze_error = str(exc)
+        logger.warning("analyze skipped for %s: %s", paper.id, exc)
+    except Exception as exc:  # network / auth / parse failure
+        analyze_status = "failed"
+        analyze_error = f"{type(exc).__name__}: {exc}"
+        logger.exception("analyze failed for %s", paper.id)
+
     logger.info(
-        "ingested paper %s: %d reviews, acceptance=%s, score=%s",
+        "ingested paper %s: %d reviews, acceptance=%s, score=%s, analyze=%s",
         paper.id,
         len(reviews),
         paper.acceptance,
         score_result.score,
+        analyze_status,
     )
     return {
         "paper_id": paper.id,
@@ -128,4 +144,6 @@ def ingest_paper(db: Session, forum_id: str) -> dict[str, object]:
         "grade": score_result.grade,
         "verdict": score_result.verdict,
         "score_status": score_result.status,
+        "analyze_status": analyze_status,
+        "analyze_error": analyze_error,
     }

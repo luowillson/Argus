@@ -86,17 +86,34 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
 
     reviewers: list[ReviewerVoice] = []
     consensus_labels: list[str] = []
+
+    # Prefer LLM-picked verbatim quotes when ai_insights is ready; fall back to
+    # the raw-content heuristic so the page still has voices pre-LLM.
+    llm_quotes_by_handle: dict[str, dict] = {}
+    if insight and insight.reviewer_voices:
+        for v in insight.reviewer_voices:
+            handle = v.get("handle") if isinstance(v, dict) else None
+            if isinstance(handle, str):
+                llm_quotes_by_handle[handle] = v
+
     for row in review_rows:
         if row.rating is None:
             continue
+        handle = _short_handle(row.signatures)
         label = _coerce_label(row.recommendation)
         consensus_labels.append(label)
+        llm_voice = llm_quotes_by_handle.get(handle)
+        quote = (
+            llm_voice.get("quote", "")
+            if llm_voice
+            else _quote_from_content(row.content or {})
+        )
         reviewers.append(
             ReviewerVoice(
-                handle=_short_handle(row.signatures),
+                handle=handle,
                 rating=int(round(float(row.rating))),
                 label=label,
-                quote=_quote_from_content(row.content or {}),
+                quote=quote,
             )
         )
 

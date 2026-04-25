@@ -17,6 +17,7 @@ dependencies = [
     "pgvector>=0.3",
     "httpx>=0.27",
     "python-multipart>=0.0.12",
+    "sentence-transformers>=5.4.1",
 ]
 
 [dependency-groups]

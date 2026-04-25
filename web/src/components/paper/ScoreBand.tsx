@@ -2,6 +2,7 @@ import type { Paper } from "@/lib/types";
 import { cn, scoreColor } from "@/lib/utils";
 import { VerdictPill } from "@/components/brand/VerdictPill";
 import { DimensionTiles } from "./DimensionTiles";
+import { MethodologyDialog } from "./MethodologyDialog";
 
 const STRENGTH_COLOR = {
   strong: "text-accept",
@@ -38,6 +39,7 @@ export function ScoreBand({ paper, aiReady = true }: Props) {
         <div className="mt-1.5 font-sans text-[13px] text-muted-2">
           grade <strong className="font-semibold text-ink">{paper.grade}</strong>
         </div>
+        <MethodologyDialog />
       </div>
 
       <DimensionTiles

@@ -2,6 +2,10 @@ import Link from "next/link";
 import type { Paper } from "@/lib/types";
 import { SaveButton } from "./SaveButton";
 
+function openreviewUrl(id: string) {
+  return `https://openreview.net/forum?id=${encodeURIComponent(id)}`;
+}
+
 export function PaperHeader({ paper }: { paper: Paper }) {
   return (
     <header>
@@ -11,7 +15,14 @@ export function PaperHeader({ paper }: { paper: Paper }) {
             ← Back to results
           </Link>
           <span className="px-2">·</span>
-          <span className="font-mono">arxiv:{paper.id}</span>
+          <a
+            href={openreviewUrl(paper.id)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono hover:text-ink"
+          >
+            openreview:{paper.id}
+          </a>
         </div>
         <SaveButton paperId={paper.id} />
       </div>

@@ -51,7 +51,18 @@ export function ResultRow({ paper, isFirst }: Props) {
           {paper.tldr}
         </div>
         <div className="mt-2 font-mono text-[11px] text-muted">
-          arxiv:{paper.id} · {paper.citations.toLocaleString()} citations
+          <a
+            href={`https://openreview.net/forum?id=${encodeURIComponent(paper.id)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-burgundy"
+            onClick={(e) => e.stopPropagation()}
+          >
+            openreview:{paper.id}
+          </a>
+          {paper.citations > 0 && (
+            <> · {paper.citations.toLocaleString()} citations</>
+          )}
         </div>
       </div>
 

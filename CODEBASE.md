@@ -1,0 +1,359 @@
+# Veros — Codebase Reference
+
+This document is a complete reference for AI models (Claude, GPT, Gemini, etc.) working on this codebase. It covers architecture, every significant file, data flow, naming conventions, and the tradeoffs already made so you don't undo them.
+
+---
+
+## What this product does
+
+Veros fetches official peer reviews from OpenReview, computes a deterministic **Veros Score (0–10)** from reviewer ratings and confidence, then runs an LLM step to produce a TL;DR, "read deeply" / "skim or skip" section lists, per-dimension scores (Novelty / Technical / Clarity / Impact, 0–100), and verbatim reviewer quotes. The result is a single paper page that tells a researcher whether a paper is worth reading and which parts matter.
+
+---
+
+## Repository layout
+
+```
+/
+├── README.md                   ← startup guide
+├── CODEBASE.md                 ← this file
+├── CLAUDE.md                   ← Claude Code conventions
+├── docker-compose.yml          ← Postgres (pgvector) + Redis
+├── openreview_reviews.py       ← standalone CLI (reference only, not wired to the app)
+├── Designs/                    ← static JSX mockups (visual reference only)
+├── api/                        ← FastAPI backend
+│   ├── .env                    ← environment variables (never commit real keys)
+│   ├── pyproject.toml
+│   ├── alembic.ini
+│   ├── alembic/versions/0001_initial.py
+│   └── app/
+│       ├── main.py             ← app factory, CORS, router registration
+│       ├── config.py           ← pydantic-settings Settings + get_settings()
+│       ├── deps.py             ← FastAPI dependencies: DbSession, CurrentUserDep
+│       ├── db/
+│       │   ├── models.py       ← all SQLModel table definitions
+│       │   └── session.py      ← get_engine(), get_db()
+│       ├── schemas/
+│       │   └── paper.py        ← Pydantic response models: PaperDetail, PaperOut, PaperStatus, PaperStatus
+│       ├── routers/
+│       │   ├── health.py       ← GET /health, GET /stats
+│       │   ├── papers.py       ← GET/POST /papers/{id}, /status, /ingest, /analyze
+│       │   ├── search.py       ← GET /search
+│       │   └── saved.py        ← GET/POST/DELETE /saved
+│       ├── services/
+│       │   ├── openreview_client.py  ← OpenReview API v1/v2 abstraction
+│       │   ├── ingest.py             ← orchestrates fetch → upsert → score → analyze
+│       │   ├── scoring.py            ← loads DB rows, calls veros_score, upserts VerosScore
+│       │   ├── veros_score.py        ← pure deterministic formula (no DB access)
+│       │   ├── analyze.py            ← LLM call → parse → upsert AIInsight
+│       │   ├── paper_view.py         ← assembles PaperDetail from DB rows
+│       │   ├── search.py             ← ILIKE + pgvector cosine search
+│       │   ├── llm/
+│       │   │   ├── provider.py       ← LLMProvider ABC
+│       │   │   ├── openai_compatible.py ← base implementation (openai SDK)
+│       │   │   ├── gemini.py         ← GeminiProvider (uses openai SDK + Gemini base_url)
+│       │   │   ├── zai.py            ← ZaiProvider
+│       │   │   ├── factory.py        ← make_llm_provider() reads LLM_PROVIDER env var
+│       │   │   └── prompts.py        ← SYSTEM_PROMPT, build_user_prompt()
+│       │   └── embeddings/
+│       │       ├── provider.py       ← EmbeddingProvider ABC
+│       │       ├── sbert.py          ← SBERTProvider (sentence-transformers)
+│       │       └── factory.py        ← get_embedding_provider() lazy singleton
+│       ├── utils/
+│       │   └── ratings.py            ← parse_numeric(), parse_recommendation()
+│       └── workers/
+│           ├── celery_app.py         ← Celery("veros", broker=REDIS_URL, backend=REDIS_URL)
+│           └── tasks.py              ← ingest_paper_task, embed_paper_task
+└── web/                        ← Next.js 15 frontend
+    ├── .env.local              ← NEXT_PUBLIC_API_BASE_URL
+    └── src/
+        ├── app/
+        │   ├── layout.tsx      ← fonts (Newsreader/Inter/IBM Plex Mono), Providers, Toaster
+        │   ├── globals.css     ← Tailwind v4 @theme (all color/font tokens)
+        │   ├── providers.tsx   ← TanStack QueryClient wrapper
+        │   ├── not-found.tsx   ← 404 page
+        │   ├── page.tsx        ← Landing (Hero + SearchBox + StatsFooter)
+        │   ├── search/page.tsx ← Search results (server component, calls /search)
+        │   ├── papers/[id]/page.tsx ← Paper detail or <PaperPending> skeleton
+        │   └── saved/page.tsx  ← Reading list (server component, calls /saved)
+        ├── components/
+        │   ├── brand/          ← VerosMark, VIcon, VerdictPill
+        │   ├── nav/            ← TopNav, SearchHeaderBar
+        │   ├── landing/        ← Hero, SearchBox (client), StatsFooter (async server)
+        │   ├── search/         ← ResultsGrid, ResultRow, MetricsCell
+        │   └── paper/
+        │       ├── PaperView.tsx         ← shared render tree (used by page + PaperPending)
+        │       ├── PaperPending.tsx      ← client component, polls /status every 2s
+        │       ├── PaperHeader.tsx       ← title, authors, openreview link, SaveButton
+        │       ├── ScoreBand.tsx         ← score + grade + DimensionTiles + MethodologyDialog
+        │       ├── DimensionTiles.tsx    ← 4 tiles, /100, pending=true shows "—"
+        │       ├── TldrSection.tsx       ← tldr + "insights pending" badge
+        │       ├── ReadSkimGrid.tsx      ← deep/skim two-column grid
+        │       ├── ReviewerVoices.tsx    ← reviewer quotes + empty state
+        │       ├── MethodologyDialog.tsx ← "How is this scored?" modal (client)
+        │       └── SaveButton.tsx        ← optimistic save/unsave with sonner toast
+        └── lib/
+            ├── api.ts          ← API_BASE_URL, all fetch functions, Zod schemas
+            ├── adapt.ts        ← adaptPaperDetail(), adaptPaperOut() DTO→Paper
+            ├── types.ts        ← Paper, ReviewerVoice, Verdict TypeScript types
+            ├── mock-papers.ts  ← VEROS_PAPERS array (fallback when API unreachable)
+            └── utils.ts        ← cn(), scoreColor()
+```
+
+---
+
+## Database schema
+
+Six tables. All defined in `api/app/db/models.py` as SQLModel classes.
+
+```
+papers
+  id              text PK          (OpenReview forum ID, e.g. "F76bwRSLeK")
+  title           text
+  authors         text[]
+  venue           text
+  year            int
+  citations       int
+  abstract        text
+  openreview_url  text
+  acceptance      text             ("oral" | "poster" | "reject" | null)
+  ingested_at     timestamptz
+  analyzed_at     timestamptz      (set by analyze_paper; null until LLM runs)
+  created_at      timestamptz
+
+reviews
+  id              text PK          (OpenReview note ID)
+  paper_id        text FK→papers
+  invitation      text
+  signatures      text[]
+  rating          numeric(3,1)
+  confidence      numeric(3,1)
+  recommendation  text
+  content         jsonb            (raw review content fields)
+  created_at      timestamptz
+
+ai_insights
+  paper_id        text PK FK→papers
+  tldr            text
+  deep            text[]
+  skim            text[]
+  reviewer_voices jsonb            (list of {handle, rating, label, quote})
+  novelty         int
+  technical       int
+  clarity         int
+  impact          int
+  consensus       text             (e.g. "Accept · Weak Accept · Borderline")
+  model           text             (LLM model used)
+  prompt_version  int
+  generated_at    timestamptz
+
+veros_scores
+  paper_id        text PK FK→papers
+  score           numeric(3,1)     (0.0–10.0)
+  grade           text             ("A+" … "D")
+  verdict         text             ("Strong Accept" … "Reject")
+  breakdown       jsonb            (formula components + consensus_strength)
+  computed_at     timestamptz
+
+saved_papers
+  user_id         text PK
+  paper_id        text PK FK→papers
+  saved_at        timestamptz
+
+paper_embeddings
+  paper_id        text PK FK→papers
+  embedding       vector(384)      (pgvector, cosine-normalized SBERT)
+  source          text             ("title_tldr")
+  model           text
+```
+
+Indexes: `papers_title_trgm` (GIN, pg_trgm on title), `paper_embeddings_ivf` (ivfflat, cosine, lists=100).
+
+---
+
+## Veros Score formula
+
+Implemented in `api/app/services/veros_score.py`. Fully deterministic — no ML, no LLM.
+
+```python
+weights     = [0.5 + 0.125 * confidence_i for each reviewer]
+weighted_mean = Σ(rating_i * w_i) / Σ(w_i)
+sd          = sqrt(Σ(w_i * (rating_i - weighted_mean)²) / Σ(w_i))
+
+quality           = weighted_mean                     # 1–10 scale
+consensus         = clamp(10 - 2*sd, 0, 10)
+acceptance_comp   = 5 + 5 * accepted_flag             # 10=accepted, 5=unknown, 0=rejected
+volume_bonus      = min(1.0, 0.25 * (N - 2))         # caps at N=6
+
+score = 0.55*quality + 0.25*consensus + 0.15*acceptance_comp + 0.05*(10*volume_bonus)
+score = round(clamp(score, 0, 10), 1)
+```
+
+Grades: ≥9.0→A+, ≥8.3→A, ≥7.7→A−, ≥7.0→B+, ≥6.3→B, ≥5.7→B−, ≥5.0→C+, ≥4.0→C, else D.
+
+The `breakdown` jsonb in `veros_scores` stores all intermediate values including `consensus_strength` ("strong" / "moderate" / "mixed" / "split") and `n_reviews`.
+
+---
+
+## Data flow
+
+### Full ingest path (Celery worker)
+
+```
+GET /papers/{id}  →  paper not in DB
+  → 202 response to browser
+  → ingest_paper_task.delay(forum_id)      [Celery task]
+      → fetch_paper_and_reviews()          [OpenReview API]
+      → _upsert_paper() + _upsert_review() [Postgres]
+      → compute_and_store_score()          [veros_scores]
+      → analyze_paper()                    [LLM → ai_insights]
+      → embed_paper_task.delay(paper_id)   [chains embedding task]
+          → SBERTProvider.encode()
+          → upsert paper_embeddings
+
+Web polling: GET /papers/{id}/status every 2s
+  → ingest="ready", analysis="ready"
+  → re-fetch GET /papers/{id} → full PaperDetail
+```
+
+### Synchronous path (POST /papers/{id}/ingest)
+
+Same logic runs inline in the request thread. No worker needed. Useful for testing.
+
+### Search path
+
+```
+GET /search?q=...
+  → ILIKE text match on papers.title + papers.abstract
+  → SBERT encode(query) → cosine nearest-neighbour in paper_embeddings
+  → union IDs, dedup, fetch Paper+VerosScore+AIInsight
+  → sort by score desc → list[PaperOut]
+```
+
+---
+
+## API response schemas
+
+All defined in `api/app/schemas/paper.py`.
+
+**PaperDetail** (GET /papers/{id}) — full shape, returned when paper exists:
+```
+id, title, authors, venue, citations, openreview_url, acceptance,
+score, grade, verdict, consensus_strength, reviewer_count,
+novelty, technical, clarity, impact,
+tldr, deep[], skim[], reviewers[], consensus,
+score_breakdown, status ("ready"|"score_only"|"ingested_no_score"|"not_found")
+```
+
+**PaperOut** (GET /search, GET /saved) — lightweight list shape (no reviewers/deep/skim):
+```
+id, title, authors, venue, acceptance,
+score, grade, verdict, novelty, technical, clarity, impact,
+tldr, consensus, consensus_strength, reviewer_count
+```
+
+**PaperStatus** (GET /papers/{id}/status):
+```
+paper_id, ingest ("queued"|"ready"|"failed"), analysis ("pending"|"ready"|"failed")
+```
+
+---
+
+## LLM provider system
+
+`api/app/services/llm/provider.py` defines:
+
+```python
+class LLMProvider(ABC):
+    def complete_json(self, system: str, user: str,
+                      max_output_tokens: int, temperature: float) -> JSONResponse: ...
+```
+
+`JSONResponse` has `.text` (raw string), `.model`, `.input_tokens`, `.output_tokens`.
+
+Both `GeminiProvider` and `ZaiProvider` inherit from `OpenAICompatibleProvider` which uses the `openai` SDK with a custom `base_url`. Switching providers is a one-line `.env` change: `LLM_PROVIDER=gemini` or `LLM_PROVIDER=zai`. Adding a new provider: subclass `OpenAICompatibleProvider`, register in `factory.py`.
+
+The single LLM call (in `analyze.py`) returns structured JSON validated by `LLMInsightOut`:
+```python
+class LLMInsightOut(BaseModel):
+    tldr: str
+    deep: list[str]          # 3–5 "read deeply" phrases
+    skim: list[str]          # 2–4 "skim or skip" phrases
+    dimensions: _Dimensions  # novelty, technical, clarity, impact (0–100)
+    reviewer_voices: list[_Voice]
+    consensus_note: str
+```
+
+---
+
+## Frontend key patterns
+
+**Tailwind v4** — color and font tokens are in `web/src/app/globals.css` as CSS `@theme` variables, not `tailwind.config.ts`. Custom colors: `paper` (#fbf8f1), `ink` (#1c1815), `burgundy` (#7a1c1c), `cream` (#f5e7e0), `rule` (#d6cab2), `rule-soft` (#ede5d6), `muted` (#7a6a55), `muted-2` (#5a4a32), `accept` (#0f5132), `borderline` (#7a5f00).
+
+**Next.js 15 App Router** — `params` and `searchParams` are Promises and must be awaited:
+```tsx
+export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+}
+```
+
+**API ↔ Frontend** — `web/src/lib/api.ts` owns all fetch functions and Zod schemas. `web/src/lib/adapt.ts` converts API DTOs to the frontend `Paper` type (fills nulls with defaults so components never deal with null). Never add null handling in components — do it in `adapt.ts`.
+
+**Search columns** — `grid-cols-[78px_70px_1fr_140px_180px_120px]` (Score | Grade | Paper | Venue | Metrics | Verdict). `MetricsCell` shows `nov/tech/clar/imp` as numbers/100, no bars.
+
+**Mock fallback** — every server-side page calls the API first; if unreachable or returns 0 results, falls back to `VEROS_PAPERS` from `mock-papers.ts`. This means the UI is always browseable even with the API down.
+
+**`aiReady` flag** — controls whether dimension tiles show numbers or "—" and whether the TL;DR section shows an "insights pending" badge. Derived from `dto.status === "ready"`.
+
+---
+
+## Auth
+
+Auth is stubbed. `api/app/deps.py` `get_current_user()` always returns `CurrentUser(id="demo-user", email="demo@veros.local")`. Swap this function for a Clerk JWT verifier when real auth is needed — all routers use `CurrentUserDep` so no other changes are needed.
+
+---
+
+## Key conventions
+
+- **No `uv run` from repo root** — always `cd api` first. The repo root has a stray `app.py` in a different Python environment that shadows the `app` package.
+- **SQLModel primary keys** — when using `sa_column=Column(..., primary_key=True)`, do not also set `Field(primary_key=True)` on the same field. It causes a `RuntimeError`.
+- **Raw SQL for pgvector** — `db.execute(sa_text("... embedding <=> CAST(:vec AS vector) ..."), {"vec": vec_str})`. SQLModel's `exec()` doesn't understand the `<=>` operator.
+- **Alembic migrations** — use raw SQL (`op.execute(...)`) rather than SQLModel metadata, because `pgvector` and `pg_trgm` extensions must be created before the tables that reference them.
+- **Celery late imports** — `tasks.py` imports service functions inside the task body, not at module level, to avoid circular imports (`celery_app ← tasks ← services ← celery_app`).
+- **SBERT singleton** — `get_embedding_provider()` in `factory.py` loads the model once per process. The model (~80 MB) is downloaded to `~/.cache/huggingface/` on first call and cached.
+- **LLM max_output_tokens=4000** — necessary for Gemini; 1500 caused mid-string JSON truncation.
+- **Rating scale** — always 1–10 (`DEFAULT_RATING_SCALE_MAX = 10`). Older 1–6 venues exist but can't be auto-detected reliably, so we default to 10.
+
+---
+
+## OpenReview client notes
+
+`api/app/services/openreview_client.py` handles both API v1 (legacy, `api.openreview.net`) and v2 (current, `api2.openreview.net`). Key behaviors:
+- `normalize_content()` flattens v2's `{"value": ...}` wrapper so downstream code sees plain strings in both versions.
+- `looks_like_official_review()` uses invitation regex AND content-field fallback. Both branches must exist because some venues use non-standard invitation names.
+- `parse_forum_id()` accepts raw IDs, full URLs, and URL-encoded URLs.
+
+---
+
+## How to add a feature
+
+**New API endpoint:**
+1. Add route to an existing router (or create `api/app/routers/new.py`)
+2. Register it in `api/app/main.py` via `app.include_router(...)`
+3. Add response schema to `api/app/schemas/paper.py` if needed
+4. Add fetch function + Zod schema to `web/src/lib/api.ts`
+
+**New paper page section:**
+1. Add fields to `PaperDetail` in `api/app/schemas/paper.py` and `build_paper_detail()` in `paper_view.py`
+2. Add fields to `Paper` type in `web/src/lib/types.ts`
+3. Handle nulls in `adaptPaperDetail()` in `web/src/lib/adapt.ts`
+4. Create component in `web/src/components/paper/`
+5. Add to `PaperView.tsx`
+
+**New Celery task:**
+1. Add task to `api/app/workers/tasks.py` decorated with `@celery_app.task`
+2. Import and call via `.delay()` from the appropriate trigger point
+
+**New LLM provider:**
+1. Create `api/app/services/llm/newprovider.py` subclassing `OpenAICompatibleProvider`
+2. Add `elif settings.llm_provider == "newprovider": return NewProvider(settings)` in `factory.py`
+3. Add env vars to `config.py` and `.env`

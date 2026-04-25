@@ -1,6 +1,9 @@
 import { SearchHeaderBar } from "@/components/nav/SearchHeaderBar";
 import { ResultsGrid } from "@/components/search/ResultsGrid";
+import { fetchSearch } from "@/lib/api";
+import { adaptPaperOut } from "@/lib/adapt";
 import { VEROS_PAPERS } from "@/lib/mock-papers";
+import type { Paper } from "@/lib/types";
 
 export default async function SearchPage({
   searchParams,
@@ -10,16 +13,28 @@ export default async function SearchPage({
   const { q = "" } = await searchParams;
   const query = q.trim();
 
-  // M1: filter mock list by simple substring on title/authors/tldr.
-  // M7 will replace this with the API + pgvector cosine search.
-  const filtered = query
-    ? VEROS_PAPERS.filter((p) => {
-        const hay = `${p.title} ${p.authors} ${p.tldr} ${p.venue}`.toLowerCase();
-        return hay.includes(query.toLowerCase());
-      })
-    : VEROS_PAPERS;
+  let results: Paper[] = [];
+  let fromApi = false;
 
-  const results = [...filtered].sort((a, b) => b.score - a.score);
+  try {
+    const dtos = await fetchSearch(query);
+    if (dtos.length > 0) {
+      results = dtos.map(adaptPaperOut);
+      fromApi = true;
+    }
+  } catch {
+    // API unreachable — fall through to mock data.
+  }
+
+  if (!fromApi) {
+    const filtered = query
+      ? VEROS_PAPERS.filter((p) => {
+          const hay = `${p.title} ${p.authors} ${p.tldr} ${p.venue}`.toLowerCase();
+          return hay.includes(query.toLowerCase());
+        })
+      : VEROS_PAPERS;
+    results = [...filtered].sort((a, b) => b.score - a.score);
+  }
 
   return (
     <div className="min-h-screen bg-paper">

@@ -56,3 +56,30 @@ class PaperDetail(BaseModel):
         "ingested_no_score",
         "not_found",
     ]
+
+
+class PaperStatus(BaseModel):
+    paper_id: str
+    ingest: Literal["queued", "ready", "failed"]
+    analysis: Literal["pending", "ready", "failed"]
+
+
+class PaperOut(BaseModel):
+    """Lightweight shape returned by GET /search — no reviewers/deep/skim."""
+
+    id: str
+    title: str
+    authors: str
+    venue: str | None
+    acceptance: str | None
+    score: float | None
+    grade: str
+    verdict: Verdict
+    novelty: int | None
+    technical: int | None
+    clarity: int | None
+    impact: int | None
+    tldr: str | None
+    consensus: str | None
+    consensus_strength: ConsensusStrength
+    reviewer_count: int
