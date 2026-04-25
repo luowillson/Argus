@@ -1,18 +1,24 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { VIcon } from "@/components/brand/VIcon";
+import { getSearchDestination } from "@/lib/query";
 
 export function SearchBox() {
   const router = useRouter();
   const [q, setQ] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    const trimmed = q.trim();
-    if (!trimmed) return;
-    router.push(`/search?q=${encodeURIComponent(trimmed)}`);
+    const destination = getSearchDestination(q);
+    if (!destination) return;
+    router.push(destination.href);
   }
 
   return (
@@ -24,6 +30,7 @@ export function SearchBox() {
         <VIcon name="search" size={18} />
       </div>
       <input
+        ref={inputRef}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Paper title, arXiv ID, or OpenReview link"
@@ -31,7 +38,7 @@ export function SearchBox() {
       />
       <button
         type="submit"
-        className="bg-burgundy px-8 font-sans text-[14px] font-medium tracking-[0.04em] text-white hover:bg-burgundy/90"
+        className="cursor-pointer bg-burgundy px-8 font-sans text-[14px] font-medium tracking-[0.04em] text-white hover:bg-burgundy/90"
       >
         Verify
       </button>

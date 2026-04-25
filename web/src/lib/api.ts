@@ -46,6 +46,7 @@ export const PaperDetailSchema = z.object({
     z.object({
       handle: z.string(),
       rating: z.number(),
+      rating_scale_max: z.number().nullable().optional(),
       label: VerdictSchema,
       quote: z.string(),
     }),

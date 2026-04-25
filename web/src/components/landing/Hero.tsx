@@ -21,15 +21,15 @@ export function Hero() {
       <div className="mt-3.5 font-sans text-[13px] text-muted">
         Try{" "}
         <Link
-          href="/papers/2402.09876"
-          className="text-burgundy underline underline-offset-2"
+          href="/papers/F76bwRSLeK"
+          className="cursor-pointer text-burgundy underline underline-offset-2"
         >
-          arXiv:2402.09876
+          openreview:F76bwRSLeK
         </Link>
         ,{" "}
         <Link
           href="/search?q=Sparse%20Autoencoders"
-          className="text-burgundy underline underline-offset-2"
+          className="cursor-pointer text-burgundy underline underline-offset-2"
         >
           &ldquo;Sparse Autoencoders&rdquo;
         </Link>

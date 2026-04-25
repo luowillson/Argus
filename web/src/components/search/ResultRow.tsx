@@ -3,7 +3,6 @@
 import { useRouter } from "next/navigation";
 import type { Paper } from "@/lib/types";
 import { cn, scoreColor } from "@/lib/utils";
-import { VerdictPill } from "@/components/brand/VerdictPill";
 import { MetricsCell } from "./MetricsCell";
 
 type Props = {
@@ -14,6 +13,7 @@ type Props = {
 export function ResultRow({ paper, isFirst }: Props) {
   const router = useRouter();
   const dest = `/papers/${paper.id}`;
+  const score = paper.score;
 
   return (
     <div
@@ -23,33 +23,28 @@ export function ResultRow({ paper, isFirst }: Props) {
       onKeyDown={(e) => e.key === "Enter" && router.push(dest)}
       className={cn(
         "grid cursor-pointer items-start gap-5 border-b border-rule-soft py-5 transition hover:bg-cream/40",
-        "grid-cols-[78px_70px_1fr_140px_180px_120px]",
+        "grid-cols-[92px_minmax(0,1.55fr)_150px_220px]",
         isFirst && "border-t border-rule",
       )}
     >
       {/* Score */}
       <div>
-        <div
-          className={cn(
-            "text-[30px] font-medium leading-none tracking-[-0.02em] tabular-nums",
-            scoreColor(paper.score),
-          )}
-        >
-          {paper.score.toFixed(1)}
-        </div>
-        <div className="mt-1 font-sans text-[11px] text-muted">out of 10</div>
-      </div>
-
-      {/* Grade */}
-      <div className="pt-1">
-        <div className="font-mono text-[16px] font-semibold text-ink">
-          {paper.grade}
+        <div className="mt-0.5 flex items-baseline gap-1.5">
+          <div
+            className={cn(
+              "text-[32px] font-medium leading-none tracking-[-0.02em] tabular-nums",
+              scoreColor(paper.score),
+            )}
+          >
+            {score !== null ? score.toFixed(1) : "—"}
+          </div>
+          <div className="font-sans text-[13px] text-muted">/ 10</div>
         </div>
       </div>
 
       {/* Paper */}
       <div>
-        <div className="text-[17px] font-medium leading-snug text-burgundy">
+        <div className="text-[18px] font-medium leading-snug text-burgundy">
           {paper.title}
         </div>
         <div className="mt-1 font-sans text-[12px] text-muted-2">
@@ -63,7 +58,7 @@ export function ResultRow({ paper, isFirst }: Props) {
             href={`https://openreview.net/forum?id=${encodeURIComponent(paper.id)}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="hover:text-burgundy"
+            className="cursor-pointer hover:text-burgundy"
             onClick={(e) => e.stopPropagation()}
           >
             openreview:{paper.id}
@@ -76,10 +71,7 @@ export function ResultRow({ paper, isFirst }: Props) {
 
       {/* Venue */}
       <div className="pt-1">
-        <div className="text-[13px] font-medium text-prose">{paper.venue}</div>
-        <div className="mt-1 font-mono text-[10px] text-muted">
-          {paper.acceptance ? `accepted (${paper.acceptance})` : "—"}
-        </div>
+        <div className="text-[14px] font-medium text-prose">{paper.venue}</div>
       </div>
 
       {/* Metrics — numbers only, no bars */}
@@ -90,18 +82,6 @@ export function ResultRow({ paper, isFirst }: Props) {
           clarity={paper.clarity}
           impact={paper.impact}
         />
-      </div>
-
-      {/* Verdict + consensus */}
-      <div className="flex flex-col items-start gap-2.5 pt-1">
-        <VerdictPill verdict={paper.verdict} />
-        <div className="font-sans text-[11px] text-muted">
-          consensus
-          <br />
-          <span className="text-ink">
-            {paper.consensus.split(" · ")[0]} ×{paper.consensus.split(" · ").length}
-          </span>
-        </div>
       </div>
     </div>
   );

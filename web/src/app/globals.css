@@ -28,3 +28,14 @@ body {
   color: var(--color-ink);
   font-family: var(--font-serif);
 }
+
+a[href],
+button:not(:disabled),
+[role="link"],
+[role="button"] {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}

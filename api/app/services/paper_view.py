@@ -8,6 +8,7 @@ even before the LLM has selected the best quotes.
 
 from __future__ import annotations
 
+import re
 from typing import cast, get_args
 
 from sqlmodel import Session, select
@@ -16,6 +17,10 @@ from app.db.models import AIInsight, Paper, Review, VerosScore
 from app.schemas.paper import PaperDetail, ReviewerVoice, Verdict
 
 _VERDICT_VALUES = set(get_args(Verdict))
+_SCALE_PATTERNS = (
+    re.compile(r"(?:out\s+of|/)\s*(10|6|5)\b", re.IGNORECASE),
+    re.compile(r"\b(?:1\s*[-–]\s*|scale\s+of\s+)(10|6|5)\b", re.IGNORECASE),
+)
 
 
 def _short_handle(signatures: list[str]) -> str:
@@ -65,6 +70,17 @@ def _quote_from_content(content: dict) -> str:
     return ""
 
 
+def _rating_scale_max(content: dict) -> int | None:
+    rating = content.get("rating")
+    if not isinstance(rating, str):
+        return None
+    for pattern in _SCALE_PATTERNS:
+        match = pattern.search(rating)
+        if match:
+            return int(match.group(1))
+    return None
+
+
 def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
     paper = db.get(Paper, paper_id)
     if paper is None:
@@ -112,6 +128,7 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
             ReviewerVoice(
                 handle=handle,
                 rating=int(round(float(row.rating))),
+                rating_scale_max=_rating_scale_max(row.content or {}),
                 label=label,
                 quote=quote,
             )

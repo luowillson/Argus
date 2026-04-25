@@ -8,6 +8,7 @@ export type Verdict =
 export interface ReviewerVoice {
   handle: string;
   rating: number;
+  ratingScaleMax?: number | null;
   label: Verdict;
   quote: string;
 }
@@ -19,7 +20,7 @@ export interface Paper {
   tldr: string;
   venue: string;
   citations: number;
-  score: number;
+  score: number | null;
   grade: string;
   verdict: Verdict;
   novelty: number;

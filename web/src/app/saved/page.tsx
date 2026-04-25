@@ -1,4 +1,4 @@
-import { TopNav } from "@/components/nav/TopNav";
+import { SearchHeaderBar } from "@/components/nav/SearchHeaderBar";
 import { ResultsGrid } from "@/components/search/ResultsGrid";
 import { fetchSaved } from "@/lib/api";
 import { adaptPaperOut } from "@/lib/adapt";
@@ -23,7 +23,7 @@ export default async function SavedPage() {
 
   return (
     <div className="min-h-screen bg-paper">
-      <TopNav />
+      <SearchHeaderBar />
 
       <div className="px-16 pt-9 pb-1.5">
         <h1 className="text-[26px] font-medium tracking-[-0.011em]">

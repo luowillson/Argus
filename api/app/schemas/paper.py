@@ -16,6 +16,7 @@ ConsensusStrength = Literal["strong", "moderate", "mixed", "split"]
 class ReviewerVoice(BaseModel):
     handle: str
     rating: int
+    rating_scale_max: int | None = None
     label: Verdict
     quote: str
 
