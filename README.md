@@ -52,6 +52,10 @@ uv run celery -A app.workers.celery_app:celery_app worker --loglevel=info
 
 The worker handles ingest, LLM analysis, and embedding tasks triggered when you visit an unknown paper URL.
 
+> On macOS, the worker is configured to use Celery's `solo` pool automatically.
+> This avoids `SIGABRT` crashes from native ML dependencies such as
+> `sentence-transformers` / `torch` inside prefork worker processes.
+
 ### 4. Start the web app
 
 ```bash

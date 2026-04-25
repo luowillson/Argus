@@ -16,7 +16,7 @@ export function PaperView({
     <article className="mx-auto max-w-[1100px] px-24 pt-9 pb-16">
       <PaperHeader paper={paper} />
       <ScoreBand paper={paper} aiReady={aiReady} />
-      <TldrSection tldr={paper.tldr} aiReady={aiReady} />
+      <TldrSection paperId={paper.id} tldr={paper.tldr} aiReady={aiReady} />
       {(paper.deep.length > 0 || paper.skim.length > 0) && (
         <ReadSkimGrid deep={paper.deep} skim={paper.skim} />
       )}
