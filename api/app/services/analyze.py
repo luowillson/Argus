@@ -85,8 +85,13 @@ class AnalyzeError(RuntimeError):
     """Raised when the paper has too little content to ground an LLM analysis."""
 
 
-def analyze_paper(db: Session, paper_id: str) -> AIInsight:
-    """Run the LLM step and persist `ai_insights` for this paper."""
+def analyze_paper(db: Session, paper_id: str, *, force: bool = False) -> AIInsight:
+    """Run the LLM step and persist `ai_insights` for this paper.
+
+    When ``force`` is False, if a row already exists in ``ai_insights`` for
+    this paper, it is returned and the LLM is not called. Use
+    ``force=True`` (e.g. ``POST /papers/{id}/analyze``) to re-run inference.
+    """
     paper = db.get(Paper, paper_id)
     if paper is None:
         raise AnalyzeError(f"paper {paper_id!r} not in DB; ingest first")
@@ -98,6 +103,15 @@ def analyze_paper(db: Session, paper_id: str) -> AIInsight:
         raise AnalyzeError(
             f"paper {paper_id!r} has only {len(rows)} reviews; need >= 2 to analyze"
         )
+
+    if not force:
+        existing = db.get(AIInsight, paper_id)
+        if existing is not None:
+            logger.info(
+                "analyze_paper: skipping LLM, using existing ai_insights for %s",
+                paper_id,
+            )
+            return existing
 
     reviews_for_prompt = _build_review_inputs(rows)
     user_prompt = build_user_prompt(

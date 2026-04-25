@@ -53,7 +53,7 @@ def analyze(paper_id: str, db: DbSession) -> dict[str, object]:
     """Re-run the LLM analysis for an already-ingested paper."""
     forum_id = parse_forum_id(paper_id)
     try:
-        insight = analyze_paper(db, forum_id)
+        insight = analyze_paper(db, forum_id, force=True)
     except AnalyzeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
