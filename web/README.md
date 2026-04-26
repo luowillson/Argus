@@ -1,36 +1,75 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Veros Web
 
-## Getting Started
+Next.js frontend for Veros, the OpenReview paper scoring and review distillation app.
 
-First, run the development server:
+## Stack
+
+- Next.js `16.2.4` App Router
+- React `19.2.4`
+- TypeScript 5
+- Tailwind CSS v4 tokens in `src/app/globals.css`
+- TanStack Query for client polling/mutations
+- Zod schemas in `src/lib/api.ts`
+- Radix Dialog/Tooltip and `sonner` toasts
+
+## Run Locally
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+pnpm install
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The app runs at `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Set the API base URL in `.env.local`:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```text
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
+```
 
-## Learn More
+The frontend does not connect to Postgres directly. To share ingested papers
+with the team, point the FastAPI backend's `api/.env` `DATABASE_URL` at the
+shared pgvector Postgres database, then run `make db-migrate` from the repo root.
 
-To learn more about Next.js, take a look at the following resources:
+## Routes
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Route | Purpose |
+|---|---|
+| `/` | Landing page with OpenReview search input and live stats |
+| `/search?q=` | Results grid, sorted by Veros score |
+| `/papers/[id]` | Paper detail page; queues ingest when the API returns `202` |
+| `/saved` | Demo user's saved reading list |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Source Map
 
-## Deploy on Vercel
+| Path | Role |
+|---|---|
+| `src/app/layout.tsx` | Root layout, providers, fonts, toaster |
+| `src/app/page.tsx` | Landing page |
+| `src/app/search/page.tsx` | Server-rendered search results with API/mock fallback |
+| `src/app/papers/[id]/page.tsx` | Paper detail page with queued-ingest handling |
+| `src/app/saved/page.tsx` | Saved papers page |
+| `src/lib/api.ts` | Fetch functions and Zod DTO schemas |
+| `src/lib/adapt.ts` | API DTO to frontend `Paper` adapter; null/default handling lives here |
+| `src/lib/types.ts` | Frontend domain types |
+| `src/lib/mock-papers.ts` | Offline fallback data |
+| `src/components/paper/PaperPending.tsx` | Client polling while ingest/analysis is running |
+| `src/components/paper/PaperView.tsx` | Shared paper render tree |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Development Notes
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `params` and `searchParams` are Promises in this Next version; await them in server pages.
+- API contract changes should start in `src/lib/api.ts`, then flow through `src/lib/adapt.ts`.
+- Components should receive adapted `Paper` values rather than raw DTOs.
+- `aiReady` controls pending states for dimension tiles and the TL;DR/insight UI.
+- Server pages fall back to `VEROS_PAPERS` when the API is unreachable, so the UI remains browseable during backend work.
+- Fonts are loaded in `src/app/layout.tsx`: Newsreader, Inter, and IBM Plex Mono.
+
+## Commands
+
+```bash
+pnpm dev
+pnpm build
+pnpm lint
+pnpm start
+```

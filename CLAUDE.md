@@ -11,20 +11,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 **Veros** — a full-stack web app that fetches OpenReview peer reviews, computes a deterministic Veros Score (0–10), and runs an LLM step to produce TL;DRs, read-vs-skim guidance, and reviewer quotes.
 
-Stack: Next.js 15 (App Router, TypeScript, Tailwind v4) · FastAPI + SQLModel + Alembic · Postgres 16 + pgvector + pg_trgm · Redis + Celery · Gemini / Z.AI (OpenAI-compatible LLM interface) · sentence-transformers (SBERT).
+Stack: Next.js 16.2 (App Router, React 19, TypeScript, Tailwind v4) · FastAPI + SQLModel + Alembic · Postgres 16 + pgvector + pg_trgm · Redis + Celery · Z.AI / Gemini (OpenAI-compatible LLM interface) · sentence-transformers (SBERT).
 
 ---
 
 ## Critical gotchas — read before editing
 
-### Never run Python commands from repo root
-The repo root contains a stray `app.py` file from a different environment. Always `cd api` before running `uv run ...`, otherwise Python imports `app` from the wrong place.
+### Run API Python commands from `api/`
+The FastAPI package and `pyproject.toml` live under `api/`. Run `uv run ...` commands from that directory so imports resolve against `api/app`.
 
 ```bash
 # correct
 cd api && uv run uvicorn app.main:app --reload
 
-# wrong — will fail with "ModuleNotFoundError: No module named 'fastapi'"
+# wrong — no API project is configured at the repo root
 uv run uvicorn app.main:app --reload
 ```
 
@@ -34,7 +34,7 @@ When a field uses `sa_column=Column(..., primary_key=True)`, do **not** also set
 ### Tailwind v4 — tokens live in CSS, not tailwind.config.ts
 All color and font tokens are in `web/src/app/globals.css` inside an `@theme {}` block. There is no `tailwind.config.ts` for custom values. Use `--color-burgundy`, `--color-paper`, etc. as Tailwind utilities.
 
-### Next.js 15 — params/searchParams are Promises
+### Next.js 16 App Router — params/searchParams are Promises
 ```tsx
 // correct
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
@@ -58,8 +58,17 @@ Setting it lower (e.g. 1500) causes Gemini to truncate mid-JSON. Don't reduce it
 
 ## Running everything locally
 
+For normal team development, prefer the shared Postgres URL in `api/.env` so
+ingested papers, scores, insights, and embeddings are visible to everyone. Keep
+Redis local unless the team has explicitly provisioned a shared queue. Use a
+personal `DEMO_USER_ID` / `DEMO_USER_EMAIL` so saved papers stay separate.
+
 ```bash
 # 1. Infrastructure
+# Shared DB mode: Redis only needs to be local.
+docker compose up -d redis
+
+# Isolated local DB mode:
 docker compose up -d
 
 # 2. API (hot-reload)
@@ -73,6 +82,9 @@ uv run celery -A app.workers.celery_app:celery_app worker --loglevel=info
 # 4. Web (third terminal)
 cd web && pnpm dev
 ```
+
+Root helpers exist for the common commands: `make redis-up`, `make infra-up`,
+`make db-migrate`, `make api-dev`, `make worker`, and `make web-dev`.
 
 ---
 
@@ -98,11 +110,17 @@ cd web && pnpm dev
 
 ## Auth stub
 
-`api/app/deps.py` `get_current_user()` always returns `CurrentUser(id="demo-user")`. All routers use `CurrentUserDep`. To add real auth, replace only this function.
+`api/app/deps.py` `get_current_user()` returns `CurrentUser` from `DEMO_USER_ID` and `DEMO_USER_EMAIL` settings, defaulting to `demo-user` / `demo@veros.local`. All routers use `CurrentUserDep`. To add real auth, replace only this function.
+
+When using the shared database, set these env vars per developer so the
+`saved_papers` table remains personal even though the paper cache is shared.
 
 ---
 
-## Legacy files (do not delete, do not wire into the app)
+## Standalone/reference files
 
-- `openreview_reviews.py` — standalone CLI, used as a reference for OpenReview API behavior
+- `openreview_reviews.py` — standalone CLI for OpenReview review fetching and score summaries; not wired into the FastAPI app
+- `scoring/` — reusable local scoring implementation used by the standalone OpenReview tooling
+- `paper_scores.json`, `score_scales.json`, `data/` — local scoring caches/outputs
+- `reviews2.md` — generated sample review export
 - `Designs/` — static JSX mockups, visual reference only. The HTMLs reference a missing `veros-shared.jsx` and will throw on open.

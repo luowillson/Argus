@@ -17,7 +17,22 @@ Veros surfaces and distills OpenReview peer reviews. Paste any OpenReview forum 
 
 ## Quick start
 
-### 1. Start Postgres + Redis
+### 1. Choose a database
+
+For team development, use the shared Postgres database instead of syncing local
+Docker volumes. Ask for the shared connection string, then put it in `api/.env`:
+
+```text
+DATABASE_URL=postgresql+psycopg://<user>:<password>@<host>:5432/<database>?sslmode=require
+DEMO_USER_ID=<your-name>
+DEMO_USER_EMAIL=<your-name>@veros.local
+```
+
+The shared database must be Postgres with `pgvector` available. Paper ingest,
+scores, AI insights, and embeddings are then shared by everyone. Use a unique
+`DEMO_USER_ID` so `/saved` stays personal.
+
+If you are working offline or want an isolated database, run the local stack:
 
 ```bash
 docker compose up -d
@@ -25,11 +40,17 @@ docker compose up -d
 
 Postgres is exposed on `localhost:5432`, Redis on `localhost:6379`. Data persists in a Docker volume (`pgdata`).
 
+Redis can stay local even when Postgres is shared; it is only the Celery queue:
+
+```bash
+docker compose up -d redis
+```
+
 ### 2. Set up the API
 
 ```bash
 cd api
-cp .env.example .env    # fill in API keys (see Environment variables below)
+cp .env.example .env    # fill in API keys and, for team dev, the shared DATABASE_URL
 uv sync                 # create venv and install all Python deps
 uv run alembic upgrade head   # create tables + pgvector/pg_trgm extensions
 ```
@@ -126,7 +147,7 @@ The importer is safe to rerun. It upserts papers, reviews, and scores by ID.
 
 ## OpenReview scoring utilities
 
-This repo also includes local scoring tools for OpenReview review data. They can fetch reviews, normalize venue-specific scores, and cache score summaries.
+This repo also includes local scoring tools for OpenReview review data. They can fetch reviews, normalize venue-specific scores, cache score summaries, and bulk-export accepted-paper review data.
 
 ### Setup
 
@@ -187,7 +208,7 @@ python scripts/parse_neurips_2025_accepted.py --limit 5
 
 ### Backend integration
 
-The reusable service API lives in `argus_openreview.service`:
+The reusable service API for the standalone tooling lives in `argus_openreview.service`:
 
 ```python
 from argus_openreview.service import get_score_summary
@@ -206,26 +227,48 @@ The returned payload is JSON-safe and can be sent directly from a Flask, FastAPI
 ## Environment variables (`api/.env`)
 
 ```text
+# Local Docker Postgres. For shared team dev, replace with the hosted pgvector
+# Postgres URL from api/shared-db.env.example.
 DATABASE_URL=postgresql+psycopg://veros:veros@localhost:5432/veros
 REDIS_URL=redis://localhost:6379/0
 
-# LLM provider: "gemini" or "zai"
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=<your key from aistudio.google.com>
-GEMINI_MODEL=gemini-2.5-flash
+# LLM provider: "zai" or "gemini"
+LLM_PROVIDER=zai
 
-# Z.AI optional alternative
+# Z.AI default
 ZAI_API_KEY=<your Z.AI key>
 ZAI_BASE_URL=https://api.z.ai/api/paas/v4/
-ZAI_MODEL=glm-5.1
+ZAI_MODEL=glm-4.6
+
+# Gemini optional alternative
+GEMINI_API_KEY=<your key from aistudio.google.com>
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+GEMINI_MODEL=gemini-2.5-flash
 
 # OpenReview credentials, only needed for auth-gated venues
 OPENREVIEW_USERNAME=
 OPENREVIEW_PASSWORD=
 
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+# Use per-developer values when connecting to the shared database.
+DEMO_USER_ID=demo-user
+DEMO_USER_EMAIL=demo@veros.local
 CORS_ORIGINS=http://localhost:3000
 LOG_LEVEL=INFO
+```
+
+`api/shared-db.env.example` contains a smaller template for joining the shared
+team database.
+
+Useful root commands:
+
+```bash
+make infra-up     # local Postgres + Redis
+make redis-up     # local Redis only, for shared Postgres mode
+make db-migrate   # cd api && uv run alembic upgrade head
+make api-dev
+make worker
+make web-dev
 ```
 
 `web/.env.local`:
@@ -267,6 +310,13 @@ LLM_PROVIDER=zai
 ```
 
 Both use an OpenAI-compatible HTTP interface. Adding a new provider requires implementing one method in `api/app/services/llm/provider.py` and registering it in `factory.py`.
+
+The current default in `api/app/config.py` is:
+
+```text
+LLM_PROVIDER=zai
+ZAI_MODEL=glm-4.6
+```
 
 ---
 
