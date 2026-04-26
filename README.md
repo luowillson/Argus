@@ -266,10 +266,27 @@ Useful root commands:
 make infra-up     # local Postgres + Redis
 make redis-up     # local Redis only, for shared Postgres mode
 make db-migrate   # cd api && uv run alembic upgrade head
+make db-merge-to-shared
 make api-dev
 make worker
 make web-dev
 ```
+
+To merge an existing local Docker database into the shared team database, make
+sure `api/.env` points at the shared `DATABASE_URL`, then run:
+
+```bash
+make db-merge-to-shared
+```
+
+The merge script upserts paper data in dependency order. For a teammate whose
+local saved papers are still under `demo-user`, run from `api/` with:
+
+```bash
+uv run python scripts/merge_db_to_shared.py --rewrite-saved-user-id <teammate-name>
+```
+
+Use `--dry-run` first to preview row counts without writing.
 
 `web/.env.local`:
 
