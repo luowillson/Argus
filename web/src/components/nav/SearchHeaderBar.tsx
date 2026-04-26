@@ -8,11 +8,27 @@ import { TopNav } from "./TopNav";
 
 type Props = {
   initialQuery?: string;
+  /** When provided, the input becomes controlled by the parent. */
+  value?: string;
+  /** Called on every keystroke when the input is controlled. */
+  onChange?: (next: string) => void;
+  /**
+   * Custom submit handler. If provided, the default routing logic is skipped
+   * and the parent decides what to do with the submitted query.
+   */
+  onSubmitOverride?: (query: string) => void;
 };
 
-export function SearchHeaderBar({ initialQuery = "" }: Props) {
+export function SearchHeaderBar({
+  initialQuery = "",
+  value,
+  onChange,
+  onSubmitOverride,
+}: Props) {
   const router = useRouter();
-  const [q, setQ] = useState(initialQuery);
+  const isControlled = value !== undefined;
+  const [internalQ, setInternalQ] = useState(initialQuery);
+  const q = isControlled ? value! : internalQ;
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -20,8 +36,17 @@ export function SearchHeaderBar({ initialQuery = "" }: Props) {
     inputRef.current?.select();
   }, []);
 
+  function handleChange(next: string) {
+    if (onChange) onChange(next);
+    if (!isControlled) setInternalQ(next);
+  }
+
   function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (onSubmitOverride) {
+      onSubmitOverride(q);
+      return;
+    }
     const destination = getSearchDestination(q);
     if (!destination) return;
     router.push(destination.href);
@@ -36,7 +61,7 @@ export function SearchHeaderBar({ initialQuery = "" }: Props) {
         <input
           ref={inputRef}
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => handleChange(e.target.value)}
           className="flex-1 border-none bg-transparent px-3.5 text-[14px] text-ink outline-none"
         />
         <button
