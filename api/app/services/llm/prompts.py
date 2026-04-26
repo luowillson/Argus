@@ -21,6 +21,8 @@ RESPONSE FORMAT — CRITICAL:
 Your entire response MUST be a single valid JSON object.
 - Start your response with { and end with }
 - Do NOT include any text, explanation, or commentary before or after the JSON
+- Do NOT use <thought>, <think>, <reasoning>, or any XML/HTML-style tags
+- Do NOT show your reasoning, planning, or chain-of-thought
 - Do NOT wrap the JSON in markdown code fences (no ```)
 - Do NOT add trailing commas after the last item in any array or object
 - Do NOT add comments inside the JSON

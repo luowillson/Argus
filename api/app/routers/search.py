@@ -17,6 +17,7 @@ from app.services.search import (
     classify_intent,
     count_papers,
     search_papers,
+    search_papers_with_total,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,33 @@ def search_count(
 ) -> dict[str, int]:
     """Return total result count for a query — used by the frontend for pagination."""
     return {"total": count_papers(db, q)}
+
+
+class SearchPageResponse(BaseModel):
+    results: list[PaperOut]
+    total: int
+
+
+@router.get("/page", response_model=SearchPageResponse)
+def search_page(
+    db: DbSession,
+    q: str = Query(default="", description="Search query — title keywords or semantic text"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    sort: SortKey = Query(
+        default="relevance",
+        description="Sort results by relevance, score, novelty, technical, clarity, or impact",
+    ),
+    mode: SearchMode = Query(
+        default="auto",
+        description="auto | topic | specific (relevance is the default sort for non-empty queries)",
+    ),
+) -> SearchPageResponse:
+    """Search ingested papers and return the page plus total using one candidate pass."""
+    results, total = search_papers_with_total(
+        db, q, limit=limit, offset=offset, mode=mode, sort_by=sort
+    )
+    return SearchPageResponse(results=results, total=total)
 
 
 @router.get("", response_model=list[PaperOut])

@@ -1,8 +1,13 @@
 import { API_BASE_URL } from "@/lib/api";
 
+const STATS_TIMEOUT_MS = 1200;
+
 async function fetchStats(): Promise<{ paper_count: number; review_count: number }> {
   try {
-    const res = await fetch(`${API_BASE_URL}/stats`, { cache: "no-store" });
+    const res = await fetch(`${API_BASE_URL}/stats`, {
+      next: { revalidate: 60 },
+      signal: AbortSignal.timeout(STATS_TIMEOUT_MS),
+    });
     if (res.ok) return res.json();
   } catch {
     // API unreachable — show placeholder

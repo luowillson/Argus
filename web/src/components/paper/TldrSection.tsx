@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { analyzePaper, fetchPaper } from "@/lib/api";
+import { LatexText } from "@/components/ui/LatexText";
+import { analyzePaper, fetchPaperClient } from "@/lib/api";
+import { upsertLocalPaper } from "@/lib/localPapers";
 
 type Props = {
   paperId: string;
@@ -49,10 +51,11 @@ export function TldrSection({
     async function generateSummary() {
       try {
         await analyzePaper(paperId);
-        const result = await fetchPaper(paperId);
+        const result = await fetchPaperClient(paperId, { refresh: true });
         if (cancelled || !result || result === "queued" || result === "failed") return;
 
         if (result.tldr) {
+          upsertLocalPaper(result);
           setSummary(result.tldr);
           setStatus("idle");
           setError(null);
@@ -93,7 +96,7 @@ export function TldrSection({
         )}
       </div>
       <p className="mt-2 max-w-[820px] font-serif text-[19px] leading-[1.6]">
-        {summary}
+        <LatexText>{summary}</LatexText>
       </p>
       {status === "error" && error && (
         <p className="mt-3 max-w-[820px] font-sans text-[12px] leading-[1.6] text-muted">

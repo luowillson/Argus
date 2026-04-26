@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import health, papers, saved, search
+from app.routers import corpus, health, papers, saved, search
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health.router, prefix="/api/v1")
+    app.include_router(corpus.router, prefix="/api/v1")
     app.include_router(papers.router, prefix="/api/v1")
     app.include_router(search.router, prefix="/api/v1")
     app.include_router(saved.router, prefix="/api/v1")

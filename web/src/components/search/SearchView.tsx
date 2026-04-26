@@ -7,8 +7,12 @@ import { ResultRow } from "@/components/search/ResultRow";
 import { PaperPendingCard } from "@/components/search/PaperPendingCard";
 import { PaginationBar } from "@/components/search/PaginationBar";
 import { SortControl } from "@/components/search/SortControl";
-import { fetchSearchLive, type SearchSortKey } from "@/lib/api";
+import { type SearchSortKey } from "@/lib/api";
 import { adaptPaperOut } from "@/lib/adapt";
+import {
+  LOCAL_CORPUS_UPDATED_EVENT,
+  searchLocalPapers,
+} from "@/lib/localPapers";
 import { submitSearch } from "@/lib/searchSubmit";
 import type { Paper } from "@/lib/types";
 
@@ -23,10 +27,12 @@ type Props = {
   totalPages?: number;
   activeSort?: SearchSortKey;
   sortLabel?: string;
-  sortExplicit?: boolean;
+  clientFetch?: boolean;
 };
 
-const DEBOUNCE_MS = 250;
+const DEBOUNCE_MS = 450;
+const PAGE_SIZE = 20;
+const MIN_LIVE_QUERY_CHARS = 3;
 
 export function SearchView({
   initialQuery,
@@ -39,7 +45,7 @@ export function SearchView({
   totalPages = 1,
   activeSort = "score",
   sortLabel = "Veros score",
-  sortExplicit = false,
+  clientFetch = false,
 }: Props) {
   const router = useRouter();
 
@@ -50,23 +56,67 @@ export function SearchView({
     initialPendingTitle ?? null,
   );
   const [notFound, setNotFound] = useState(initialNotFound);
+  const [remoteTotalCount, setRemoteTotalCount] = useState(initialTotalCount ?? initialResults.length);
+  const [remoteTotalPages, setRemoteTotalPages] = useState(totalPages);
+  const [corpusRevision, setCorpusRevision] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const lastIssuedQ = useRef(initialQuery);
+
+  useEffect(() => {
+    function bumpCorpusRevision() {
+      setCorpusRevision((value) => value + 1);
+    }
+
+    window.addEventListener(LOCAL_CORPUS_UPDATED_EVENT, bumpCorpusRevision);
+    return () => {
+      window.removeEventListener(LOCAL_CORPUS_UPDATED_EVENT, bumpCorpusRevision);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!clientFetch) return;
+    const controller = new AbortController();
+    const offset = (currentPage - 1) * PAGE_SIZE;
+    const mode = initialFocusId ? "specific" : "topic";
+
+    async function loadPage() {
+      try {
+        const page = await searchLocalPapers(
+          initialQuery,
+          PAGE_SIZE,
+          offset,
+          mode,
+          activeSort,
+        );
+        if (controller.signal.aborted) return;
+        setResults(page.results.map(adaptPaperOut));
+        setRemoteTotalCount(page.total);
+        setRemoteTotalPages(Math.max(1, Math.ceil(page.total / PAGE_SIZE)));
+      } catch {
+        // Keep the local fallback results when the API is unavailable.
+      }
+    }
+
+    loadPage();
+    return () => controller.abort();
+  }, [activeSort, clientFetch, corpusRevision, currentPage, initialFocusId, initialQuery]);
 
   // Debounced live topic search on typing.
   useEffect(() => {
     if (q === lastIssuedQ.current) return;
     const trimmed = q.trim();
-    const liveSort =
-      sortExplicit ? activeSort : trimmed ? "relevance" : "score";
+    if (trimmed.length > 0 && trimmed.length < MIN_LIVE_QUERY_CHARS) return;
     const controller = new AbortController();
     const handle = setTimeout(async () => {
       lastIssuedQ.current = q;
       try {
-        const dtos = await fetchSearchLive(trimmed, liveSort, controller.signal);
-        const mapped = dtos.map(adaptPaperOut);
+        const page = await searchLocalPapers(trimmed, 20, 0, "topic", activeSort);
+        if (controller.signal.aborted) return;
+        const mapped = page.results.map(adaptPaperOut);
         // Live typing always re-enters topic mode and clears focus/notFound.
         setResults(mapped);
+        setRemoteTotalCount(page.total);
+        setRemoteTotalPages(Math.max(1, Math.ceil(page.total / PAGE_SIZE)));
         setFocusId(null);
         setPendingTitle(null);
         setNotFound(false);
@@ -80,7 +130,7 @@ export function SearchView({
       clearTimeout(handle);
       controller.abort();
     };
-  }, [activeSort, q, sortExplicit]);
+  }, [activeSort, q]);
 
   async function handleSubmit(query: string) {
     if (!query.trim() || submitting) return;
@@ -105,7 +155,8 @@ export function SearchView({
 
   const showPendingCard = focusId && pendingTitle && !results.some((p) => p.id === focusId);
   const totalCount =
-    initialTotalCount ?? orderedResults.length + (showPendingCard ? 1 : 0);
+    remoteTotalCount ?? orderedResults.length + (showPendingCard ? 1 : 0);
+  const effectiveTotalPages = remoteTotalPages || totalPages;
   const effectiveSortLabel =
     q.trim() && activeSort === "relevance"
       ? "sorted by relevance"
@@ -183,7 +234,7 @@ export function SearchView({
               <PaginationBar
                 query={initialQuery}
                 currentPage={currentPage}
-                totalPages={totalPages}
+                totalPages={effectiveTotalPages}
                 activeSort={activeSort}
               />
             )}

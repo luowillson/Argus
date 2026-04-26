@@ -1,4 +1,5 @@
 import type { Paper } from "@/lib/types";
+import { LatexText } from "@/components/ui/LatexText";
 
 export function ReviewerVoices({ paper }: { paper: Paper }) {
   return (
@@ -23,7 +24,7 @@ export function ReviewerVoices({ paper }: { paper: Paper }) {
                 </span>
               </div>
               <p className="mt-1.5 font-serif text-[15px] italic leading-[1.6]">
-                &ldquo;{rv.quote}&rdquo;
+                &ldquo;<LatexText>{rv.quote}</LatexText>&rdquo;
               </p>
             </li>
           ))}

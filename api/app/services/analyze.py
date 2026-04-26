@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 
 from app.config import get_settings
 from app.db.models import AIInsight, Paper, Review
-from app.services.llm.factory import make_llm_provider
+from app.services.llm.factory import effective_llm_model_name, make_llm_provider
 from app.services.llm.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.services.paper_view import _short_handle
 
@@ -58,51 +58,42 @@ class LLMInsightOut(BaseModel):
 def _clean_llm_json(text: str) -> str:
     """Robustly extract a JSON object from messy LLM output.
 
-    Handles: code fences (```json / ``` / ~~~), leading prose, trailing prose,
-    trailing commas before } or ], and JS-style // line comments.
+    Handles:
+    - <thought>...</thought>, <think>...</think>, <reasoning>...</reasoning> CoT blocks
+    - Code fences (```json / ``` / ~~~)
+    - Leading and trailing prose
+    - Trailing commas before } or ]
+    - JS-style // line comments
+
+    Strategy: strip reasoning tags first, then find the LAST balanced top-level
+    {...} block (LLMs put the answer last after preambles).
     """
     import re
 
     text = text.strip()
 
+    # Strip chain-of-thought blocks (Gemma, DeepSeek-R1, Qwen, etc.)
+    for tag in ("thought", "think", "reasoning", "scratchpad"):
+        text = re.sub(rf"<{tag}>.*?</{tag}>", "", text, flags=re.DOTALL | re.IGNORECASE)
+
     # Strip outer code fences: ```json ... ``` or ~~~ ... ~~~
     fence_re = re.compile(r"^(?:```[a-zA-Z]*|~~~[a-zA-Z]*)\s*\n(.*?)(?:```|~~~)\s*$", re.DOTALL)
-    m = fence_re.match(text)
+    m = fence_re.match(text.strip())
     if m:
         text = m.group(1).strip()
 
-    # Find the first { and extract to its matching closing }
+    # After stripping reasoning tags and code fences, slice from the FIRST {
+    # to the LAST }. This gives the entire outer JSON object (any inner braces
+    # for dimensions/voices are kept intact).
     start = text.find("{")
-    if start != -1:
-        depth = 0
-        in_str = False
-        esc = False
-        for i, ch in enumerate(text[start:], start=start):
-            if esc:
-                esc = False
-                continue
-            if ch == "\\" and in_str:
-                esc = True
-                continue
-            if ch == '"':
-                in_str = not in_str
-                continue
-            if in_str:
-                continue
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    text = text[start : i + 1]
-                    break
-        else:
-            text = text[start:]  # truncated — pass through and let json.loads error
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start : end + 1]
 
     # Remove JS-style // line comments (outside strings — best-effort regex)
     text = re.sub(r"//[^\n\"]*\n", "\n", text)
 
-    # Remove trailing commas before ] or } (common Gemma artifact)
+    # Remove trailing commas before ] or }
     text = re.sub(r",\s*([}\]])", r"\1", text)
 
     return text.strip()
@@ -145,14 +136,24 @@ def analyze_paper(db: Session, paper_id: str, *, force: bool = False) -> AIInsig
             f"paper {paper_id!r} has only {len(rows)} reviews; need >= 2 to analyze"
         )
 
+    expected_model = effective_llm_model_name()
+
     if not force:
         existing = db.get(AIInsight, paper_id)
         if existing is not None:
+            if existing.model == expected_model:
+                logger.info(
+                    "analyze_paper: cache hit for %s (model=%s)",
+                    paper_id,
+                    existing.model,
+                )
+                return existing
             logger.info(
-                "analyze_paper: skipping LLM, using existing ai_insights for %s",
+                "analyze_paper: cache invalid for %s (cached=%s, configured=%s) — re-running",
                 paper_id,
+                existing.model,
+                expected_model,
             )
-            return existing
 
     reviews_for_prompt = _build_review_inputs(rows)
     user_prompt = build_user_prompt(
