@@ -223,6 +223,30 @@ export const PaperOutSchema = z.object({
 });
 
 export type PaperOutDTO = z.infer<typeof PaperOutSchema>;
+export const LandingGraphNodeSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  venue: z.string().nullable(),
+  score: z.number().nullable(),
+  verdict: VerdictSchema,
+});
+
+export const LandingGraphEdgeSchema = z.object({
+  source: z.string(),
+  target: z.string(),
+  weight: z.number(),
+});
+
+export const LandingGraphSchema = z.object({
+  generated_at: z.string().datetime(),
+  topic_paper_id: z.string().nullable().optional(),
+  topic_title: z.string().nullable().optional(),
+  topic_venue: z.string().nullable().optional(),
+  nodes: z.array(LandingGraphNodeSchema),
+  edges: z.array(LandingGraphEdgeSchema),
+});
+
+export type LandingGraphDTO = z.infer<typeof LandingGraphSchema>;
 export type SearchSortKey =
   | "relevance"
   | "score"
@@ -275,6 +299,22 @@ export async function fetchSearch(
     throw new Error(`Search API error ${res.status}`);
   }
   return z.array(PaperOutSchema).parse(await res.json());
+}
+
+export async function fetchLandingGraph(init?: RequestInit): Promise<LandingGraphDTO | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/landing/graph`,
+      withReadTimeout({
+        cache: "no-store",
+        ...init,
+      }),
+    );
+    if (!res.ok) return null;
+    return LandingGraphSchema.parse(await res.json());
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchSearchPage(

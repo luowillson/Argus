@@ -20,7 +20,7 @@ export async function StatsFooter() {
   const hasCounts = paper_count > 0;
 
   return (
-    <footer className="absolute bottom-0 left-0 right-0 flex items-center justify-between border-t border-rule px-24 py-5 font-sans text-[13px] text-muted-2">
+    <footer className="absolute bottom-0 left-0 right-0 flex flex-col gap-2 border-t border-rule px-6 py-5 font-sans text-[13px] text-muted-2 sm:px-10 lg:flex-row lg:items-center lg:justify-between lg:px-16 xl:px-24">
       <div>
         {hasCounts ? (
           <>

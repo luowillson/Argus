@@ -21,6 +21,7 @@ def test_create_app_registers_core_routes() -> None:
     assert "/api/v1/saved/{paper_id}" in paths
     assert "/api/v1/search/lookup" in paths
     assert "/api/v1/search/page" in paths
+    assert "/api/v1/landing/graph" in paths
 
 
 class _FakeRows:
@@ -116,3 +117,170 @@ def test_openreview_title_similarity_helper() -> None:
 
     assert _title_similarity("Attention is All You Need", "Attention Is All You Need") == 1.0
     assert _title_similarity("transformer paper", "Attention Is All You Need") < 0.5
+
+
+def test_landing_graph_falls_back_when_no_rows() -> None:
+    from app.services.landing_graph import build_landing_graph
+
+    class _EmptySession:
+        def execute(self, statement: object, params: dict[str, int]):
+            sql = str(statement)
+
+            class _CountRow:
+                def scalar_one(self):
+                    return 500
+
+            class _Rows:
+                def mappings(self):
+                    return self
+
+                def first(self):
+                    return None
+
+                def __iter__(self):
+                    return iter(())
+
+            if "COUNT(*) FROM paper_embeddings" in sql:
+                return _CountRow()
+            return _Rows()
+
+    graph = build_landing_graph(_EmptySession())  # type: ignore[arg-type]
+
+    assert graph.nodes == []
+    assert graph.edges == []
+
+
+def test_landing_graph_parses_string_embeddings() -> None:
+    from app.services.landing_graph import build_landing_graph
+
+    class _Session:
+        def execute(self, statement: object, params: dict[str, int]):
+            sql = str(statement)
+
+            class _CountRow:
+                def scalar_one(self):
+                    return 500
+
+            class _SeedRows:
+                def mappings(self):
+                    return self
+
+                def first(self):
+                    return {"paper_id": "p1", "title": "Paper One", "venue": "ICLR"}
+
+            class _ClusterRows:
+                def mappings(self):
+                    return self
+
+                def __iter__(self):
+                    return iter(
+                        [
+                            {
+                                "id": "p1",
+                                "title": "Paper One",
+                                "venue": "ICLR",
+                                "score": 8.4,
+                                "verdict": "Accept",
+                                "embedding": "[1,0,0]",
+                            },
+                            {
+                                "id": "p2",
+                                "title": "Paper Two",
+                                "venue": "ICLR",
+                                "score": 8.1,
+                                "verdict": "Weak Accept",
+                                "embedding": "[0.9,0.1,0]",
+                            },
+                        ]
+                    )
+
+            if "COUNT(*) FROM paper_embeddings" in sql:
+                return _CountRow()
+            if "eligible_seed" in sql:
+                return _SeedRows()
+            return _ClusterRows()
+
+    graph = build_landing_graph(_Session())  # type: ignore[arg-type]
+
+    assert graph.topic_paper_id == "p1"
+    assert graph.topic_title == "Paper One"
+    assert [node.id for node in graph.nodes] == ["p1", "p2"]
+    assert graph.edges
+    assert graph.edges[0].source == "p1"
+    assert graph.edges[0].target == "p2"
+
+
+def test_landing_graph_connects_topic_cluster() -> None:
+    from app.services.landing_graph import build_landing_graph
+
+    cluster_rows = [
+        {
+            "id": "seed",
+            "title": "Seed Paper",
+            "venue": "ICLR",
+            "score": 9.0,
+            "verdict": "Strong Accept",
+            "embedding": "[1,0,0]",
+        },
+        {
+            "id": "n1",
+            "title": "Neighbor 1",
+            "venue": "ICLR",
+            "score": 8.7,
+            "verdict": "Accept",
+            "embedding": "[0.95,0.05,0]",
+        },
+        {
+            "id": "n2",
+            "title": "Neighbor 2",
+            "venue": "ICLR",
+            "score": 8.2,
+            "verdict": "Weak Accept",
+            "embedding": "[0.93,0.07,0]",
+        },
+        {
+            "id": "n3",
+            "title": "Neighbor 3",
+            "venue": "ICLR",
+            "score": 7.8,
+            "verdict": "Borderline",
+            "embedding": "[0.9,0.08,0.02]",
+        },
+    ]
+
+    class _Session:
+        def execute(self, statement: object, params: dict[str, int]):
+            sql = str(statement)
+
+            class _CountRow:
+                def scalar_one(self):
+                    return 500
+
+            class _SeedRows:
+                def mappings(self):
+                    return self
+
+                def first(self):
+                    return {"paper_id": "seed", "title": "Seed Paper", "venue": "ICLR"}
+
+            class _ClusterRows:
+                def mappings(self):
+                    return self
+
+                def __iter__(self):
+                    return iter(cluster_rows)
+
+            if "COUNT(*) FROM paper_embeddings" in sql:
+                return _CountRow()
+            if "eligible_seed" in sql:
+                return _SeedRows()
+            return _ClusterRows()
+
+    graph = build_landing_graph(_Session())  # type: ignore[arg-type]
+
+    touched = {graph.topic_paper_id}
+    for edge in graph.edges:
+        touched.add(edge.source)
+        touched.add(edge.target)
+    assert touched == {"seed", "n1", "n2", "n3"}
+    assert len(graph.edges) >= len(graph.nodes) - 1
