@@ -223,7 +223,13 @@ export const PaperOutSchema = z.object({
 });
 
 export type PaperOutDTO = z.infer<typeof PaperOutSchema>;
-export type SearchSortKey = "score" | "novelty" | "technical" | "clarity" | "impact";
+export type SearchSortKey =
+  | "relevance"
+  | "score"
+  | "novelty"
+  | "technical"
+  | "clarity"
+  | "impact";
 
 const SearchPageSchema = z.object({
   results: z.array(PaperOutSchema),
@@ -252,7 +258,7 @@ export async function fetchSearch(
   limit = 20,
   offset = 0,
   mode: "auto" | "topic" | "specific" = "auto",
-  sort: SearchSortKey = "score",
+  sort: SearchSortKey = "relevance",
 ): Promise<PaperOutDTO[]> {
   const params = new URLSearchParams({
     q: query,
@@ -276,7 +282,7 @@ export async function fetchSearchPage(
   limit = 20,
   offset = 0,
   mode: "auto" | "topic" | "specific" = "auto",
-  sort: SearchSortKey = "score",
+  sort: SearchSortKey = "relevance",
   init?: RequestInit,
 ): Promise<SearchPageDTO> {
   const params = new URLSearchParams({
@@ -301,7 +307,7 @@ export async function fetchSearchPageClient(
   limit = 20,
   offset = 0,
   mode: "auto" | "topic" | "specific" = "auto",
-  sort: SearchSortKey = "score",
+  sort: SearchSortKey = "relevance",
   signal?: AbortSignal,
 ): Promise<SearchPageDTO> {
   const key = searchCacheKey(query, limit, offset, mode, sort);
@@ -316,7 +322,7 @@ export async function fetchSearchPageClient(
 /** Live (debounced) topic-mode fuzzy search; pass an AbortSignal to cancel in-flight calls. */
 export async function fetchSearchLive(
   query: string,
-  sort: SearchSortKey = "score",
+  sort: SearchSortKey = "relevance",
   signal?: AbortSignal,
 ): Promise<PaperOutDTO[]> {
   const params = new URLSearchParams({ q: query, mode: "topic", sort });
@@ -332,7 +338,7 @@ export async function fetchSearchLive(
 
 export async function fetchSearchLiveClient(
   query: string,
-  sort: SearchSortKey = "score",
+  sort: SearchSortKey = "relevance",
   signal?: AbortSignal,
 ): Promise<PaperOutDTO[]> {
   const page = await fetchSearchPageClient(query, 20, 0, "topic", sort, signal);
@@ -375,7 +381,7 @@ export async function lookupSearch(query: string): Promise<SearchLookupResponse>
     20,
     0,
     response.intent === "specific" ? "specific" : "topic",
-    "score",
+    "relevance",
   );
   return response;
 }

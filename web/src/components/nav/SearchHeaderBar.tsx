@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { VIcon } from "@/components/brand/VIcon";
 import { getSearchDestination } from "@/lib/query";
 import { TopNav } from "./TopNav";
 
@@ -56,20 +57,19 @@ export function SearchHeaderBar({
     <TopNav>
       <form
         onSubmit={submit}
-        className="flex h-8 max-w-[540px] flex-1 items-stretch bg-white"
+        className="flex h-8 max-w-[540px] flex-1 items-center bg-white"
       >
+        <div className="pointer-events-none flex items-center pl-3 text-muted-2">
+          <VIcon name="search" size={14} />
+        </div>
         <input
           ref={inputRef}
           value={q}
           onChange={(e) => handleChange(e.target.value)}
-          className="flex-1 border-none bg-transparent px-3.5 text-[14px] text-ink outline-none"
+          aria-label="Search papers"
+          placeholder="Paper title, arXiv ID, or OpenReview link"
+          className="flex-1 border-none bg-transparent px-2.5 text-[14px] text-ink outline-none placeholder:text-muted/60"
         />
-        <button
-          type="submit"
-          className="cursor-pointer bg-ink px-4 text-[13px] text-white"
-        >
-          Search
-        </button>
       </form>
 
       <nav className="ml-auto flex items-center gap-7 opacity-90">

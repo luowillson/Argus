@@ -7,7 +7,6 @@ even before the LLM has selected the best quotes.
 """
 
 from __future__ import annotations
-
 from typing import cast, get_args
 
 from sqlmodel import Session, select
@@ -16,6 +15,7 @@ from app.db.models import AIInsight, Paper, Review, VerosScore
 from app.schemas.paper import PaperDetail, ReviewerVoice, Verdict
 from app.services.dimensions import standardized_dimensions
 from app.services.scoring import normalize_rating_to_ten, rating_scale_max_for_paper
+from app.utils.ratings import parse_numeric, parse_recommendation
 
 _VERDICT_VALUES = set(get_args(Verdict))
 
@@ -70,13 +70,26 @@ def _coerce_label(value: str | None, rating: float | None = None) -> Verdict:
 
 
 def _quote_from_content(content: dict) -> str:
-    """Pick a short, useful sentence from raw review content for display."""
-    for key in ("strengths", "summary", "review", "weaknesses"):
+    """Prefer the review summary field verbatim; fall back only if needed."""
+    for key in ("summary", "summary_of_the_review", "review", "strengths", "weaknesses"):
         text = content.get(key)
         if isinstance(text, str) and text.strip():
-            sentence = text.strip().split(". ")[0]
-            return (sentence[:240] + "…") if len(sentence) > 240 else sentence
+            return text.strip()
     return ""
+
+
+def _review_rating(row: Review) -> float | None:
+    if row.rating is not None:
+        return float(row.rating)
+    content = row.content or {}
+    return parse_numeric(content.get("rating") or content.get("recommendation"))
+
+
+def _review_recommendation(row: Review) -> str | None:
+    if row.recommendation:
+        return row.recommendation
+    content = row.content or {}
+    return parse_recommendation(content.get("recommendation") or content.get("rating"))
 
 
 def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
@@ -102,35 +115,21 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
     consensus_labels: list[str] = []
     rating_scale_max = rating_scale_max_for_paper(paper)
 
-    # Prefer LLM-picked verbatim quotes when ai_insights is ready; fall back to
-    # the raw-content heuristic so the page still has voices pre-LLM.
-    llm_quotes_by_handle: dict[str, dict] = {}
-    if insight and insight.reviewer_voices:
-        for v in insight.reviewer_voices:
-            handle = v.get("handle") if isinstance(v, dict) else None
-            if isinstance(handle, str):
-                llm_quotes_by_handle[handle] = v
-
     for row in review_rows:
-        if row.rating is None:
+        raw_rating = _review_rating(row)
+        if raw_rating is None:
             continue
         handle = _short_handle(row.signatures)
-        normalized_rating = normalize_rating_to_ten(float(row.rating), rating_scale_max)
-        label = _coerce_label(row.recommendation, normalized_rating)
+        normalized_rating = normalize_rating_to_ten(raw_rating, rating_scale_max)
+        label = _coerce_label(_review_recommendation(row), normalized_rating)
         consensus_labels.append(label)
-        llm_voice = llm_quotes_by_handle.get(handle)
-        quote = (
-            llm_voice.get("quote", "")
-            if llm_voice
-            else _quote_from_content(row.content or {})
-        )
         reviewers.append(
             ReviewerVoice(
                 handle=handle,
                 rating=normalized_rating,
                 rating_scale_max=10,
                 label=label,
-                quote=quote,
+                quote=_quote_from_content(row.content or {}),
             )
         )
 

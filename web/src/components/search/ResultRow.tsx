@@ -63,9 +63,6 @@ export function ResultRow({ paper, isFirst }: Props) {
           >
             openreview:{paper.id}
           </a>
-          {paper.citations > 0 && (
-            <> · {paper.citations.toLocaleString()} citations</>
-          )}
         </div>
       </div>
 

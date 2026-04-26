@@ -11,7 +11,11 @@ interface Props {
 function pageHref(query: string, page: number, activeSort: SearchSortKey) {
   const params = new URLSearchParams();
   if (query) params.set("q", query);
-  if (activeSort !== "score") params.set("sort", activeSort);
+  if (query) {
+    params.set("sort", activeSort);
+  } else if (activeSort !== "score") {
+    params.set("sort", activeSort);
+  }
   params.set("page", String(page));
   return `/search?${params.toString()}`;
 }

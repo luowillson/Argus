@@ -41,7 +41,8 @@ disagree, lean toward the median view.
 - "reviewer_voices" must include EVERY reviewer you were given, in order, \
 using the exact handle from the input. The "quote" field is one verbatim \
 sentence (<= 220 characters) from that reviewer that best captures their \
-overall stance. Pick from strengths/weaknesses/summary/review fields.
+overall stance. Pick from strengths/weaknesses/summary/review fields only.
+Never use the recommendation or rating string itself as the quote.
 - "label" must be exactly one of: "Strong Accept", "Accept", "Weak Accept", \
 "Borderline", "Reject". Map the reviewer's recommendation/rating to the \
 closest of these.
