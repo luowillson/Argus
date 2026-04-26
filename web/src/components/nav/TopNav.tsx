@@ -22,9 +22,9 @@ export function TopNav({ variant = "landing", children, className }: Props) {
       <div className="flex h-full items-center gap-3 sm:gap-7">
         <Link
           href="/"
-          className="flex cursor-pointer items-center gap-2.5 font-semibold tracking-[0.025em]"
+          className="flex cursor-pointer items-center gap-3 text-[18px] font-semibold leading-none tracking-[0.025em]"
         >
-          <VerosMark size={20} className="text-cream" />
+          <VerosMark size={24} className="text-cream" />
           <span>Veros</span>
         </Link>
 

@@ -23,7 +23,7 @@ type Props = {
 
 const COPY: Record<Mode, string> = {
   best: "Top 100 authors by average Veros Score. Only authors with at least three scored papers are included.",
-  worst: "Worst 100 authors by average Veros Score. Only authors with at least three scored papers are included.",
+  worst: "Bottom 100 authors by average Veros Score. Only authors with at least three scored papers are included.",
   search: "Search any author in the database, including authors with fewer than three scored papers.",
 };
 
@@ -166,7 +166,7 @@ export function AuthorRankingView({
                   : "border-rule text-muted-2 hover:border-burgundy hover:text-burgundy",
               )}
             >
-              Worst 100
+              Bottom 100
             </button>
           </div>
           <AuthorRankingSearch
