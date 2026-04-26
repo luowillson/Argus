@@ -13,9 +13,13 @@ from app.services.llm.openai_compatible import OpenAICompatibleProvider
 
 class GeminiProvider(OpenAICompatibleProvider):
     def __init__(self, settings: Settings) -> None:
+        # Gemma models served via the AI Studio OpenAI-compat endpoint do not
+        # support response_format=json_object — rely on prompting instead.
+        is_gemma = settings.gemini_model.lower().startswith("gemma")
         super().__init__(
             api_key=settings.gemini_api_key,
             base_url=settings.gemini_base_url,
             model=settings.gemini_model,
             name=f"gemini:{settings.gemini_model}",
+            json_mode=not is_gemma,
         )

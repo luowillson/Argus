@@ -55,15 +55,56 @@ class LLMInsightOut(BaseModel):
     consensus_note: str = Field(default="", max_length=280)
 
 
-def _strip_code_fence(text: str) -> str:
-    """Some models wrap JSON in ```json ... ``` even when asked not to."""
+def _clean_llm_json(text: str) -> str:
+    """Robustly extract a JSON object from messy LLM output.
+
+    Handles: code fences (```json / ``` / ~~~), leading prose, trailing prose,
+    trailing commas before } or ], and JS-style // line comments.
+    """
+    import re
+
     text = text.strip()
-    if text.startswith("```"):
-        first_nl = text.find("\n")
-        if first_nl != -1:
-            text = text[first_nl + 1 :]
-        if text.endswith("```"):
-            text = text[: -len("```")]
+
+    # Strip outer code fences: ```json ... ``` or ~~~ ... ~~~
+    fence_re = re.compile(r"^(?:```[a-zA-Z]*|~~~[a-zA-Z]*)\s*\n(.*?)(?:```|~~~)\s*$", re.DOTALL)
+    m = fence_re.match(text)
+    if m:
+        text = m.group(1).strip()
+
+    # Find the first { and extract to its matching closing }
+    start = text.find("{")
+    if start != -1:
+        depth = 0
+        in_str = False
+        esc = False
+        for i, ch in enumerate(text[start:], start=start):
+            if esc:
+                esc = False
+                continue
+            if ch == "\\" and in_str:
+                esc = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    text = text[start : i + 1]
+                    break
+        else:
+            text = text[start:]  # truncated — pass through and let json.loads error
+
+    # Remove JS-style // line comments (outside strings — best-effort regex)
+    text = re.sub(r"//[^\n\"]*\n", "\n", text)
+
+    # Remove trailing commas before ] or } (common Gemma artifact)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+
     return text.strip()
 
 
@@ -127,17 +168,27 @@ def analyze_paper(db: Session, paper_id: str, *, force: bool = False) -> AIInsig
         system=SYSTEM_PROMPT, user=user_prompt, max_output_tokens=4000
     )
 
-    raw_text = _strip_code_fence(response.text)
+    raw_text = _clean_llm_json(response.text)
     try:
         parsed_json = json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        logger.error("LLM returned non-JSON for %s: %s", paper_id, exc)
+        logger.error(
+            "LLM returned non-JSON for %s: %s\n--- raw (first 800 chars) ---\n%s",
+            paper_id,
+            exc,
+            response.text[:800],
+        )
         raise AnalyzeError(f"LLM returned invalid JSON: {exc}") from exc
 
     try:
         insight = LLMInsightOut.model_validate(parsed_json)
     except ValidationError as exc:
-        logger.error("LLM JSON failed schema for %s: %s", paper_id, exc)
+        logger.error(
+            "LLM JSON failed schema for %s: %s\nparsed keys: %s",
+            paper_id,
+            exc,
+            list(parsed_json.keys()) if isinstance(parsed_json, dict) else type(parsed_json),
+        )
         raise AnalyzeError(f"LLM JSON failed schema: {exc}") from exc
 
     consensus_text = " · ".join(v.label for v in insight.reviewer_voices) or insight.consensus_note
