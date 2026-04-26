@@ -1,35 +1,61 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { analyzePaper, fetchPaper } from "@/lib/api";
+import { LatexText } from "@/components/ui/LatexText";
+import { analyzePaper, fetchPaperClient } from "@/lib/api";
+import { upsertLocalPaper } from "@/lib/localPapers";
 
 type Props = {
   paperId: string;
   tldr: string;
   aiReady?: boolean;
+  reviewerCount?: number;
 };
 
-export function TldrSection({ paperId, tldr, aiReady = true }: Props) {
+const MIN_REVIEWS_FOR_INSIGHT = 2;
+
+export function TldrSection({
+  paperId,
+  tldr,
+  aiReady = true,
+  reviewerCount = 0,
+}: Props) {
   const router = useRouter();
+  const insightImpossible =
+    !aiReady && reviewerCount < MIN_REVIEWS_FOR_INSIGHT;
+
   const [summary, setSummary] = useState(tldr);
-  const [status, setStatus] = useState<"idle" | "generating" | "error">(
-    aiReady ? "idle" : "generating",
+  const [status, setStatus] = useState<"idle" | "generating" | "error">(() => {
+    if (aiReady) return "idle";
+    if (insightImpossible) return "error";
+    return "generating";
+  });
+  const [error, setError] = useState<string | null>(
+    insightImpossible
+      ? `AI summary unavailable — this paper has ${reviewerCount} review${reviewerCount === 1 ? "" : "s"} on OpenReview (need at least ${MIN_REVIEWS_FOR_INSIGHT}).`
+      : null,
   );
-  const [error, setError] = useState<string | null>(null);
+
+  // React strict mode (next dev) re-mounts effects, which would otherwise fire
+  // analyze twice. Guard with a ref so we only ever issue one request per mount.
+  const startedRef = useRef(false);
 
   useEffect(() => {
-    if (aiReady) return;
+    if (aiReady || insightImpossible) return;
+    if (startedRef.current) return;
+    startedRef.current = true;
 
     let cancelled = false;
 
     async function generateSummary() {
       try {
         await analyzePaper(paperId);
-        const result = await fetchPaper(paperId);
-        if (cancelled || !result || result === "queued") return;
+        const result = await fetchPaperClient(paperId, { refresh: true });
+        if (cancelled || !result || result === "queued" || result === "failed") return;
 
         if (result.tldr) {
+          upsertLocalPaper(result);
           setSummary(result.tldr);
           setStatus("idle");
           setError(null);
@@ -50,7 +76,7 @@ export function TldrSection({ paperId, tldr, aiReady = true }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [aiReady, paperId, router]);
+  }, [aiReady, insightImpossible, paperId, router]);
 
   return (
     <section className="mt-8">
@@ -70,7 +96,7 @@ export function TldrSection({ paperId, tldr, aiReady = true }: Props) {
         )}
       </div>
       <p className="mt-2 max-w-[820px] font-serif text-[19px] leading-[1.6]">
-        {summary}
+        <LatexText>{summary}</LatexText>
       </p>
       {status === "error" && error && (
         <p className="mt-3 max-w-[820px] font-sans text-[12px] leading-[1.6] text-muted">

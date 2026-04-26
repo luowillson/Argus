@@ -50,6 +50,16 @@ def list_saved(db: DbSession, user: CurrentUserDep) -> list[PaperOut]:
     ]
 
 
+@router.get("/{paper_id}", response_model=dict)
+def get_saved_status(paper_id: str, db: DbSession, user: CurrentUserDep) -> dict:
+    row = db.exec(
+        select(SavedPaper).where(
+            SavedPaper.user_id == user.id, SavedPaper.paper_id == paper_id
+        )
+    ).first()
+    return {"paper_id": paper_id, "saved": row is not None}
+
+
 @router.post("", response_model=dict)
 def save_paper(req: SaveRequest, db: DbSession, user: CurrentUserDep) -> dict:
     if db.get(Paper, req.paper_id) is None:

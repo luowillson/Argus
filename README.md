@@ -142,6 +142,8 @@ uv run python scripts/import_neurips_2025.py \
 ```
 
 The importer is safe to rerun. It upserts papers, reviews, and scores by ID.
+By default, it skips papers that already exist in the database. To force a
+refresh of existing rows, pass `--force`.
 
 ---
 

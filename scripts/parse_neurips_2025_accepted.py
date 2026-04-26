@@ -25,13 +25,13 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from argus_openreview.formatting import score_summary_payload
-from argus_openreview.openreview_client import (  # noqa: E402
+from scoring.formatting import score_summary_payload
+from scoring.openreview_client import (  # noqa: E402
     build_client,
     fetch_reviews,
     normalize_content,
 )
-from argus_openreview.storage import (  # noqa: E402
+from scoring.storage import (  # noqa: E402
     DEFAULT_SCORE_CACHE_PATH,
     DEFAULT_SCORE_DB_PATH,
     save_score_payload,

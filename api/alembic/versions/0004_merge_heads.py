@@ -5,8 +5,6 @@ Revises: 0002_papers_abstract_trgm, 0003_pathway_enrichment
 Create Date: 2026-04-25
 """
 
-from alembic import op
-
 revision = "0004_merge_heads"
 down_revision = ("0002_papers_abstract_trgm", "0003_pathway_enrichment")
 branch_labels = None

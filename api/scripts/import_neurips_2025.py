@@ -25,9 +25,9 @@ def parse_args() -> argparse.Namespace:
         help="Maximum number of papers to import.",
     )
     parser.add_argument(
-        "--skip-existing",
+        "--force",
         action="store_true",
-        help="Resume without rewriting papers that already exist in the database.",
+        help="Reimport and update papers that already exist in the database.",
     )
     return parser.parse_args()
 
@@ -40,7 +40,7 @@ def main() -> None:
             db,
             source,
             limit=args.limit,
-            skip_existing=args.skip_existing,
+            skip_existing=not args.force,
         )
 
     print(

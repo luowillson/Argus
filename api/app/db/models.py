@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import ARRAY, Column, DateTime, ForeignKey, Index, Numeric, String
+from sqlalchemy import ARRAY, Column, DateTime, ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -209,3 +209,15 @@ class LearningPathwayItem(SQLModel, table=True):
         default_factory=list, sa_column=Column(JSONB, nullable=False)
     )
     score: float | None = Field(default=None, sa_column=Column(Numeric(4, 3)))
+
+
+class OpenReviewIngestFailure(SQLModel, table=True):
+    __tablename__ = "openreview_ingest_failures"
+
+    paper_id: str = Field(primary_key=True)
+    attempts: int
+    error: str = Field(sa_column=Column(Text, nullable=False))
+    failed_at: datetime = Field(
+        default_factory=lambda: datetime.now(),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )

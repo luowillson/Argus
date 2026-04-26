@@ -39,13 +39,7 @@ export function ScoreBand({ paper, aiReady = true }: Props) {
           </span>
         </div>
         <div className="mt-1.5 font-sans text-[13px] text-muted-2">
-          {score !== null ? (
-            <>
-              grade <strong className="font-semibold text-ink">{paper.grade}</strong>
-            </>
-          ) : (
-            "score pending"
-          )}
+          {score === null && "score pending"}
         </div>
         <MethodologyDialog />
       </div>

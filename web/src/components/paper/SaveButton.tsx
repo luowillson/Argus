@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { VIcon } from "@/components/brand/VIcon";
-import { savePaper, unsavePaper } from "@/lib/api";
+import { fetchSavedStatusClient, savePaper, unsavePaper } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export function SaveButton({
@@ -15,6 +15,10 @@ export function SaveButton({
 }) {
   const [saved, setSaved] = useState(initialSaved);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetchSavedStatusClient(paperId).then(setSaved).catch(() => undefined);
+  }, [paperId]);
 
   async function toggle() {
     if (busy) return;
@@ -31,7 +35,7 @@ export function SaveButton({
       }
     } catch {
       setSaved(!next); // revert
-      toast.error("Could not update reading list — is the API running?");
+      toast.error("Could not update reading list");
     } finally {
       setBusy(false);
     }

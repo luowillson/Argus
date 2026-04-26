@@ -1,66 +1,94 @@
-import { SearchHeaderBar } from "@/components/nav/SearchHeaderBar";
-import { ResultsGrid } from "@/components/search/ResultsGrid";
-import { fetchSearch } from "@/lib/api";
-import { adaptPaperOut } from "@/lib/adapt";
+import { SearchView } from "@/components/search/SearchView";
+import { type SearchSortKey } from "@/lib/api";
 import { VEROS_PAPERS } from "@/lib/mock-papers";
 import type { Paper } from "@/lib/types";
+
+const SORT_LABELS: Record<SearchSortKey, string> = {
+  score: "Veros score",
+  novelty: "novelty",
+  technical: "technical",
+  clarity: "clarity",
+  impact: "impact",
+};
+
+function parseSort(value: string | undefined): SearchSortKey {
+  if (
+    value === "novelty" ||
+    value === "technical" ||
+    value === "clarity" ||
+    value === "impact"
+  ) {
+    return value;
+  }
+  return "score";
+}
+
+const PAGE_SIZE = 20;
 
 export default async function SearchPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    sort?: string;
+    page?: string;
+    focus?: string;
+    notFound?: string;
+    pending?: string;
+  }>;
 }) {
-  const { q = "" } = await searchParams;
+  const {
+    q = "",
+    sort,
+    page: pageParam = "1",
+    focus,
+    notFound,
+    pending,
+  } = await searchParams;
   const query = q.trim();
+  const activeSort = parseSort(sort);
+  const currentPage = Math.max(1, parseInt(pageParam, 10) || 1);
+  const offset = (currentPage - 1) * PAGE_SIZE;
 
   let results: Paper[] = [];
-  let fromApi = false;
-
-  try {
-    const dtos = await fetchSearch(query);
-    if (dtos.length > 0) {
-      results = dtos.map(adaptPaperOut);
-      fromApi = true;
-    }
-  } catch {
-    // API unreachable — fall through to mock data.
-  }
-
-  if (!fromApi) {
-    const filtered = query
-      ? VEROS_PAPERS.filter((p) => {
-          const hay = `${p.title} ${p.authors} ${p.tldr} ${p.venue}`.toLowerCase();
-          return hay.includes(query.toLowerCase());
-        })
-      : VEROS_PAPERS;
-    results = [...filtered].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  }
+  let totalPages = 1;
+  let totalCount = 0;
+  const all = query
+    ? VEROS_PAPERS.filter((p) => {
+        const hay = `${p.title} ${p.authors} ${p.tldr} ${p.venue}`.toLowerCase();
+        return hay.includes(query.toLowerCase());
+      })
+    : VEROS_PAPERS;
+  const sorted = [...all].sort((a, b) => {
+    const left = activeSort === "score" ? (a.score ?? 0) : (a[activeSort] ?? 0);
+    const right = activeSort === "score" ? (b.score ?? 0) : (b[activeSort] ?? 0);
+    return right - left || (b.score ?? 0) - (a.score ?? 0);
+  });
+  totalCount = sorted.length;
+  totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  results = sorted.slice(offset, offset + PAGE_SIZE);
 
   return (
-    <div className="min-h-screen bg-paper">
-      <SearchHeaderBar initialQuery={query} />
-
-      <div className="px-16 pt-9 pb-1.5">
-        <h1 className="text-[26px] font-medium tracking-[-0.011em]">
-          {query ? (
-            <>
-              Results for{" "}
-              <em className="font-serif italic text-burgundy">
-                &ldquo;{query}&rdquo;
-              </em>
-            </>
-          ) : (
-            <>All papers</>
-          )}
-        </h1>
-        <div className="mt-1.5 font-sans text-[13px] text-muted">
-          {results.length.toLocaleString()} papers · sorted by Veros score
-        </div>
-      </div>
-
-      <div className="px-16 pb-16">
-        <ResultsGrid papers={results} />
-      </div>
-    </div>
+    <SearchView
+      key={[
+        query,
+        activeSort,
+        currentPage,
+        focus ?? "",
+        notFound ?? "",
+        pending ?? "",
+      ].join(":")}
+      initialQuery={query}
+      initialResults={results}
+      initialFocusId={focus}
+      initialNotFound={notFound === "1"}
+      initialPendingTitle={pending}
+      initialTotalCount={totalCount}
+      currentPage={currentPage}
+      totalPages={totalPages}
+      activeSort={activeSort}
+      sortLabel={SORT_LABELS[activeSort]}
+      clientFetch
+    />
   );
 }

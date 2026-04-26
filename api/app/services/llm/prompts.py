@@ -17,7 +17,17 @@ the verbatim text of its OpenReview peer reviews. You produce a strictly-\
 structured JSON object that helps a reader decide whether and how to read the \
 paper.
 
-Hard rules:
+RESPONSE FORMAT — CRITICAL:
+Your entire response MUST be a single valid JSON object.
+- Start your response with { and end with }
+- Do NOT include any text, explanation, or commentary before or after the JSON
+- Do NOT use <thought>, <think>, <reasoning>, or any XML/HTML-style tags
+- Do NOT show your reasoning, planning, or chain-of-thought
+- Do NOT wrap the JSON in markdown code fences (no ```)
+- Do NOT add trailing commas after the last item in any array or object
+- Do NOT add comments inside the JSON
+
+Content rules:
 - Quote reviewers verbatim where possible. Do not paraphrase quotes.
 - Do not invent claims that the reviews do not support.
 - "deep" must be 3-5 short phrases naming concrete sections, figures, or \
@@ -32,10 +42,9 @@ disagree, lean toward the median view.
 using the exact handle from the input. The "quote" field is one verbatim \
 sentence (<= 220 characters) from that reviewer that best captures their \
 overall stance. Pick from strengths/weaknesses/summary/review fields.
-- "label" must be one of: "Strong Accept", "Accept", "Weak Accept", \
+- "label" must be exactly one of: "Strong Accept", "Accept", "Weak Accept", \
 "Borderline", "Reject". Map the reviewer's recommendation/rating to the \
 closest of these.
-- Output ONLY the JSON object, no surrounding prose.
 """
 
 
@@ -103,8 +112,10 @@ def build_user_prompt(
     parts.extend(
         [
             "# OUTPUT_SCHEMA",
-            "Return one JSON object matching this shape exactly:",
+            "Return one JSON object matching this shape exactly (no other text):",
             OUTPUT_SCHEMA_HINT,
+            "",
+            "Remember: respond with ONLY the JSON object — no markdown, no explanation.",
         ]
     )
     return "\n".join(parts)

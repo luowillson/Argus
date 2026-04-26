@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 
 from app.config import get_settings
 from app.db.models import AIInsight, Paper, Review
-from app.services.llm.factory import make_llm_provider
+from app.services.llm.factory import effective_llm_model_name, make_llm_provider
 from app.services.llm.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.services.paper_view import _short_handle
 
@@ -55,15 +55,47 @@ class LLMInsightOut(BaseModel):
     consensus_note: str = Field(default="", max_length=280)
 
 
-def _strip_code_fence(text: str) -> str:
-    """Some models wrap JSON in ```json ... ``` even when asked not to."""
+def _clean_llm_json(text: str) -> str:
+    """Robustly extract a JSON object from messy LLM output.
+
+    Handles:
+    - <thought>...</thought>, <think>...</think>, <reasoning>...</reasoning> CoT blocks
+    - Code fences (```json / ``` / ~~~)
+    - Leading and trailing prose
+    - Trailing commas before } or ]
+    - JS-style // line comments
+
+    Strategy: strip reasoning tags first, then find the LAST balanced top-level
+    {...} block (LLMs put the answer last after preambles).
+    """
+    import re
+
     text = text.strip()
-    if text.startswith("```"):
-        first_nl = text.find("\n")
-        if first_nl != -1:
-            text = text[first_nl + 1 :]
-        if text.endswith("```"):
-            text = text[: -len("```")]
+
+    # Strip chain-of-thought blocks (Gemma, DeepSeek-R1, Qwen, etc.)
+    for tag in ("thought", "think", "reasoning", "scratchpad"):
+        text = re.sub(rf"<{tag}>.*?</{tag}>", "", text, flags=re.DOTALL | re.IGNORECASE)
+
+    # Strip outer code fences: ```json ... ``` or ~~~ ... ~~~
+    fence_re = re.compile(r"^(?:```[a-zA-Z]*|~~~[a-zA-Z]*)\s*\n(.*?)(?:```|~~~)\s*$", re.DOTALL)
+    m = fence_re.match(text.strip())
+    if m:
+        text = m.group(1).strip()
+
+    # After stripping reasoning tags and code fences, slice from the FIRST {
+    # to the LAST }. This gives the entire outer JSON object (any inner braces
+    # for dimensions/voices are kept intact).
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start : end + 1]
+
+    # Remove JS-style // line comments (outside strings — best-effort regex)
+    text = re.sub(r"//[^\n\"]*\n", "\n", text)
+
+    # Remove trailing commas before ] or }
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+
     return text.strip()
 
 
@@ -104,14 +136,24 @@ def analyze_paper(db: Session, paper_id: str, *, force: bool = False) -> AIInsig
             f"paper {paper_id!r} has only {len(rows)} reviews; need >= 2 to analyze"
         )
 
+    expected_model = effective_llm_model_name()
+
     if not force:
         existing = db.get(AIInsight, paper_id)
         if existing is not None:
+            if existing.model == expected_model:
+                logger.info(
+                    "analyze_paper: cache hit for %s (model=%s)",
+                    paper_id,
+                    existing.model,
+                )
+                return existing
             logger.info(
-                "analyze_paper: skipping LLM, using existing ai_insights for %s",
+                "analyze_paper: cache invalid for %s (cached=%s, configured=%s) — re-running",
                 paper_id,
+                existing.model,
+                expected_model,
             )
-            return existing
 
     reviews_for_prompt = _build_review_inputs(rows)
     user_prompt = build_user_prompt(
@@ -127,17 +169,27 @@ def analyze_paper(db: Session, paper_id: str, *, force: bool = False) -> AIInsig
         system=SYSTEM_PROMPT, user=user_prompt, max_output_tokens=4000
     )
 
-    raw_text = _strip_code_fence(response.text)
+    raw_text = _clean_llm_json(response.text)
     try:
         parsed_json = json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        logger.error("LLM returned non-JSON for %s: %s", paper_id, exc)
+        logger.error(
+            "LLM returned non-JSON for %s: %s\n--- raw (first 800 chars) ---\n%s",
+            paper_id,
+            exc,
+            response.text[:800],
+        )
         raise AnalyzeError(f"LLM returned invalid JSON: {exc}") from exc
 
     try:
         insight = LLMInsightOut.model_validate(parsed_json)
     except ValidationError as exc:
-        logger.error("LLM JSON failed schema for %s: %s", paper_id, exc)
+        logger.error(
+            "LLM JSON failed schema for %s: %s\nparsed keys: %s",
+            paper_id,
+            exc,
+            list(parsed_json.keys()) if isinstance(parsed_json, dict) else type(parsed_json),
+        )
         raise AnalyzeError(f"LLM JSON failed schema: {exc}") from exc
 
     consensus_text = " · ".join(v.label for v in insight.reviewer_voices) or insight.consensus_note
