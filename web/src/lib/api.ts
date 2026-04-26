@@ -67,16 +67,17 @@ export const PaperStatusSchema = z.object({
 
 export type PaperStatusDTO = z.infer<typeof PaperStatusSchema>;
 
-/** Returns the full paper detail, "queued" if a background ingest was triggered, or null on 404. */
+/** Returns the full paper detail, a transient/permanent ingest state, or null on 404. */
 export async function fetchPaper(
   paperId: string,
   init?: RequestInit,
-): Promise<PaperDetailDTO | "queued" | null> {
+): Promise<PaperDetailDTO | "queued" | "failed" | null> {
   const res = await fetch(`${API_BASE_URL}/papers/${paperId}`, {
     cache: "no-store",
     ...init,
   });
   if (res.status === 404) return null;
+  if (res.status === 410) return "failed";
   if (res.status === 202) return "queued";
   if (!res.ok) {
     throw new Error(`API error ${res.status} fetching ${paperId}`);
@@ -139,13 +140,67 @@ export async function fetchSearch(
   query: string,
   limit = 20,
   offset = 0,
+  mode: "auto" | "topic" | "specific" = "auto",
 ): Promise<PaperOutDTO[]> {
-  const params = new URLSearchParams({ q: query, limit: String(limit), offset: String(offset) });
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(limit),
+    offset: String(offset),
+    mode,
+  });
   const res = await fetch(`${API_BASE_URL}/search?${params}`, { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Search API error ${res.status}`);
   }
   return z.array(PaperOutSchema).parse(await res.json());
+}
+
+/** Live (debounced) topic-mode fuzzy search; pass an AbortSignal to cancel in-flight calls. */
+export async function fetchSearchLive(
+  query: string,
+  signal?: AbortSignal,
+): Promise<PaperOutDTO[]> {
+  const params = new URLSearchParams({ q: query, mode: "topic" });
+  const res = await fetch(`${API_BASE_URL}/search?${params}`, {
+    cache: "no-store",
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(`Search API error ${res.status}`);
+  }
+  return z.array(PaperOutSchema).parse(await res.json());
+}
+
+const LookupCandidateSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  venue: z.string().nullable().optional(),
+});
+
+export const SearchLookupResponseSchema = z.object({
+  intent: z.enum(["topic", "specific"]),
+  top_sim: z.number(),
+  paper_id: z.string().nullable(),
+  ingest_started: z.boolean(),
+  openreview_found: z.boolean(),
+  openreview_candidate: LookupCandidateSchema.nullable(),
+  results: z.array(PaperOutSchema),
+});
+
+export type SearchLookupResponse = z.infer<typeof SearchLookupResponseSchema>;
+
+/** Submit-time classifier: returns intent, optional matched paper id, and a result list. */
+export async function lookupSearch(query: string): Promise<SearchLookupResponse> {
+  const res = await fetch(`${API_BASE_URL}/search/lookup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ q: query }),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(`Search lookup API error ${res.status}`);
+  }
+  return SearchLookupResponseSchema.parse(await res.json());
 }
 
 export async function fetchSearchCount(query: string): Promise<number> {

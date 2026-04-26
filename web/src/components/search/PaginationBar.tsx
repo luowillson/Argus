@@ -18,11 +18,6 @@ export function PaginationBar({ query, currentPage, totalPages }: Props) {
 
   // Build visible page numbers: always show first, last, current ±2, with ellipsis gaps.
   const pages: (number | "…")[] = [];
-  const addPage = (n: number) => {
-    if (n < 1 || n > totalPages) return;
-    if (pages[pages.length - 1] !== n) pages.push(n);
-  };
-
   const near = new Set([1, totalPages, currentPage - 2, currentPage - 1, currentPage, currentPage + 1, currentPage + 2].filter((n) => n >= 1 && n <= totalPages));
   let prev = 0;
   for (const n of [...near].sort((a, b) => a - b)) {

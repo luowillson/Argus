@@ -6,6 +6,7 @@ from app.deps import DbSession
 from app.schemas.paper import PaperDetail, PaperStatus
 from app.services.analyze import AnalyzeError, analyze_paper
 from app.services.ingest import ingest_paper
+from app.services.ingest_failures import get_ingest_failure
 from app.services.openreview_client import parse_forum_id
 from app.services.paper_view import build_paper_detail
 
@@ -18,6 +19,8 @@ def get_status(paper_id: str, db: DbSession) -> PaperStatus:
     forum_id = parse_forum_id(paper_id)
     paper = db.get(Paper, forum_id)
     if paper is None:
+        if get_ingest_failure(db, forum_id) is not None:
+            return PaperStatus(paper_id=forum_id, ingest="failed", analysis="failed")
         return PaperStatus(paper_id=forum_id, ingest="queued", analysis="pending")
     analysis: str = "ready" if paper.analyzed_at is not None else "pending"
     return PaperStatus(paper_id=forum_id, ingest="ready", analysis=analysis)  # type: ignore[arg-type]
@@ -34,6 +37,12 @@ def get_paper(paper_id: str, db: DbSession) -> PaperDetail | JSONResponse:
 
     paper = db.get(Paper, forum_id)
     if paper is None:
+        if get_ingest_failure(db, forum_id) is not None:
+            return JSONResponse(
+                status_code=410,
+                content={"status": "failed", "paper_id": forum_id},
+            )
+
         from app.workers.tasks import ingest_paper_task  # late import
 
         ingest_paper_task.delay(forum_id)
@@ -82,6 +91,15 @@ def ingest(paper_id: str, db: DbSession) -> dict[str, object]:
     Accepts either a raw forum id or a forum URL (URL-encoded).
     """
     forum_id = parse_forum_id(paper_id)
+    failure = get_ingest_failure(db, forum_id)
+    if failure is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"OpenReview ingest already failed for {forum_id!r} after "
+                f"{failure.attempts} attempts: {failure.error}"
+            ),
+        )
     try:
         result = ingest_paper(db, forum_id)
     except Exception as exc:

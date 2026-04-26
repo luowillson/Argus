@@ -26,7 +26,7 @@ export default async function PaperPage({
     // API unreachable — fall through to mock data so the page still renders.
   }
 
-  if (result === "queued") {
+  if (result === "queued" || result === "failed") {
     return (
       <div className="min-h-screen bg-paper text-ink">
         <TopNav />
