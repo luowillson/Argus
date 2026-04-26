@@ -143,8 +143,9 @@ uv run python scripts/import_openreview_jsonl.py \
   --source ../data/iclr_2025_accepted_reviews.jsonl
 ```
 
-The import step skips existing papers by default. Add `--force` only when you
-want to refresh existing database rows.
+The import step bulk-uploads papers and reviews, skips existing papers by
+default, and does not compute scores unless you pass `--score`. Add `--force`
+only when you want to refresh existing database rows.
 
 After a bulk ingest, refresh the browser's local search corpus:
 

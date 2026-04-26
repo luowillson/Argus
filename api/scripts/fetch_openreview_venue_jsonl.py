@@ -12,11 +12,15 @@ from app.config import get_settings
 from app.services.openreview_client import (
     FetchedPaper,
     FetchedReview,
+    _build_paper,
+    _extract_acceptance,
+    _looks_like_official_review,
+    _note_to_review,
     build_client,
-    fetch_paper_and_reviews,
 )
 
 DecisionFilter = str
+SubmissionQuery = str
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "data" / "openreview_venue_reviews.jsonl"
 
 
@@ -138,13 +142,51 @@ def _review_payload(review: FetchedReview) -> dict[str, Any]:
     return asdict(review)
 
 
-def fetch_submissions(client: Any, venue: str, decision: DecisionFilter) -> list[Any]:
+def fetch_paper_and_reviews_from_submission(
+    client: Any,
+    submission_note: Any,
+) -> tuple[FetchedPaper, list[FetchedReview]]:
+    forum_id = str(submission_note.id)
+    forum_notes = client.get_notes(forum=forum_id)
+    paper = _build_paper(submission_note)
+    paper = FetchedPaper(
+        id=paper.id,
+        title=paper.title,
+        authors=paper.authors,
+        venue=paper.venue,
+        abstract=paper.abstract,
+        publication_date=paper.publication_date,
+        acceptance=_extract_acceptance(forum_notes),
+        raw_content=paper.raw_content,
+    )
+    reviews = [
+        _note_to_review(note)
+        for note in forum_notes
+        if getattr(note, "id", None) != forum_id and _looks_like_official_review(note)
+    ]
+    reviews.sort(key=lambda review: review.created or datetime.min)
+    return paper, reviews
+
+
+def _submission_query_params(venue: str, submission_query: SubmissionQuery) -> tuple[dict[str, Any], ...]:
+    queries: dict[str, dict[str, Any]] = {
+        "submission": {"invitation": f"{venue}/-/Submission"},
+        "post-submission": {"invitation": f"{venue}/-/Post_Submission"},
+        "venueid": {"content": {"venueid": venue}},
+    }
+    if submission_query == "all":
+        return tuple(queries.values())
+    return (queries[submission_query],)
+
+
+def fetch_submissions(
+    client: Any,
+    venue: str,
+    decision: DecisionFilter,
+    submission_query: SubmissionQuery,
+) -> list[Any]:
     notes: list[Any] = []
-    for params in (
-        {"invitation": f"{venue}/-/Submission"},
-        {"invitation": f"{venue}/-/Post_Submission"},
-        {"content": {"venueid": venue}},
-    ):
+    for params in _submission_query_params(venue, submission_query):
         try:
             if hasattr(client, "get_all_notes"):
                 notes.extend(client.get_all_notes(**params))
@@ -191,8 +233,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--limit", type=int, help="Maximum number of new papers to fetch.")
     parser.add_argument("--start-after", help="Skip papers until after this OpenReview forum id.")
-    parser.add_argument("--delay", type=float, default=0.5, help="Seconds between paper fetches.")
+    parser.add_argument("--delay", type=float, default=0.0, help="Seconds between paper fetches.")
     parser.add_argument("--no-resume", action="store_true", help="Do not skip existing JSONL rows.")
+    parser.add_argument(
+        "--submission-query",
+        choices=("submission", "post-submission", "venueid", "all"),
+        default="submission",
+        help=(
+            "How to list venue papers. Defaults to submission, matching the older "
+            "fast ICLR parser. Use all only if a venue is missing papers."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -207,11 +258,11 @@ def main() -> int:
         username=settings.openreview_username or None,
         password=settings.openreview_password or None,
     )
-    submissions = fetch_submissions(client, args.venue, args.decision)
+    submissions = fetch_submissions(client, args.venue, args.decision, args.submission_query)
     processed_ids = set() if args.no_resume else _read_processed_ids(args.output)
     print(
         f"Found {len(submissions)} OpenReview submissions for {args.venue} "
-        f"(decision={args.decision})."
+        f"(decision={args.decision}, submission_query={args.submission_query})."
     )
     print(f"Loaded {len(processed_ids)} existing local row(s) from {args.output}.")
 
@@ -232,11 +283,7 @@ def main() -> int:
             break
 
         try:
-            paper, reviews = fetch_paper_and_reviews(
-                note_id,
-                username=settings.openreview_username or None,
-                password=settings.openreview_password or None,
-            )
+            paper, reviews = fetch_paper_and_reviews_from_submission(client, note)
             payload = {
                 "paper": _paper_payload(paper),
                 "review_count": len(reviews),

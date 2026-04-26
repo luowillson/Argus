@@ -67,8 +67,10 @@ uv run python scripts/import_openreview_jsonl.py \
   --source ../data/iclr_2025_accepted_reviews.jsonl
 ```
 
-After importing, rerun `uv run python scripts/export_static_corpus.py` so the
-web app's local search JSON includes the new papers.
+This bulk-uploads papers and reviews, skips existing papers by default, and does
+not compute scores unless you pass `--score`. After importing, rerun
+`uv run python scripts/export_static_corpus.py` so the web app's local search
+JSON includes the new papers.
 
 ## Routes
 
