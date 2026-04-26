@@ -7,6 +7,7 @@ were established against real venues with non-standard invitation names.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -14,6 +15,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import openreview
+
+logger = logging.getLogger(__name__)
 
 REVIEW_INVITATION_PATTERN = re.compile(
     r"(^|/)(Official_Review|Review|.*Review)$", re.IGNORECASE
@@ -41,6 +44,13 @@ class FetchedPaper:
     publication_date: datetime | None
     acceptance: str | None  # 'oral' | 'poster' | 'reject' | None
     raw_content: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _FetchedForum:
+    paper: FetchedPaper
+    reviews: list[FetchedReview]
+    forum_note_count: int
 
 
 def parse_forum_id(value: str) -> str:
@@ -84,6 +94,43 @@ def _normalize_content(content: dict[str, Any]) -> dict[str, Any]:
             normalized[key] = raw["value"]
         else:
             normalized[key] = raw
+
+    # Older venues (for example ICLR 2023 on v1) use schema-specific field
+    # names. Populate the canonical keys that the rest of the backend expects.
+    if "summary" not in normalized:
+        summary = normalized.get("summary_of_the_review")
+        if isinstance(summary, str) and summary.strip():
+            normalized["summary"] = summary
+
+    if "review" not in normalized:
+        review = normalized.get("strength_and_weaknesses")
+        if isinstance(review, str) and review.strip():
+            normalized["review"] = review
+        else:
+            paper_summary = normalized.get("summary_of_the_paper")
+            if isinstance(paper_summary, str) and paper_summary.strip():
+                normalized["review"] = paper_summary
+
+    if "contribution" not in normalized:
+        for key in (
+            "technical_novelty_and_significance",
+            "empirical_novelty_and_significance",
+        ):
+            value = normalized.get(key)
+            if value is not None:
+                normalized["contribution"] = value
+                break
+
+    if "soundness" not in normalized:
+        value = normalized.get("correctness")
+        if value is not None:
+            normalized["soundness"] = value
+
+    if "rating" not in normalized:
+        value = normalized.get("recommendation")
+        if value is not None:
+            normalized["rating"] = value
+
     return normalized
 
 
@@ -100,7 +147,19 @@ def _looks_like_official_review(note: Any) -> bool:
     if any(REVIEW_INVITATION_PATTERN.search(inv) for inv in invitations):
         return True
     content = _normalize_content(getattr(note, "content", {}) or {})
-    reviewish = {"review", "summary", "strengths", "weaknesses", "rating"}
+    reviewish = {
+        "review",
+        "main_review",
+        "summary",
+        "strengths",
+        "weaknesses",
+        "questions",
+        "soundness",
+        "presentation",
+        "contribution",
+        "rating",
+        "recommendation",
+    }
     return bool(reviewish.intersection(content.keys()))
 
 
@@ -197,7 +256,7 @@ def _fetch_paper_and_reviews_at(
     api_version: str,
     username: str | None,
     password: str | None,
-) -> tuple[FetchedPaper, list[FetchedReview]]:
+) -> _FetchedForum:
     client = build_client(api_version, username, password)
     paper_note = client.get_note(id=forum_id)
     forum_notes = client.get_notes(forum=forum_id)
@@ -220,7 +279,20 @@ def _fetch_paper_and_reviews_at(
         if getattr(n, "id", None) != forum_id and _looks_like_official_review(n)
     ]
     reviews.sort(key=lambda r: r.created or datetime.min.replace(tzinfo=UTC))
-    return paper, reviews
+    return _FetchedForum(
+        paper=paper,
+        reviews=reviews,
+        forum_note_count=len(forum_notes),
+    )
+
+
+def _should_retry_v1(forum_id: str, fetched: _FetchedForum) -> bool:
+    """Retry older venues on v1 when v2 returns an incomplete forum snapshot."""
+    if not fetched.paper.raw_content or fetched.paper.title == forum_id:
+        return True
+    if fetched.forum_note_count > 1 and not fetched.reviews:
+        return True
+    return False
 
 
 def fetch_paper_and_reviews(
@@ -239,18 +311,39 @@ def fetch_paper_and_reviews(
     or paper not yet reviewed) — not an exception.
     """
     try:
-        return _fetch_paper_and_reviews_at(
+        fetched = _fetch_paper_and_reviews_at(
             forum_id,
             api_version=api_version,
             username=username,
             password=password,
         )
+        if api_version == "v2" and _should_retry_v1(forum_id, fetched):
+            try:
+                fallback = _fetch_paper_and_reviews_at(
+                    forum_id,
+                    api_version="v1",
+                    username=username,
+                    password=password,
+                )
+            except Exception:
+                logger.debug("OpenReview v1 fallback failed for %s", forum_id, exc_info=True)
+            else:
+                if (
+                    len(fallback.reviews) > len(fetched.reviews)
+                    or (
+                        fallback.paper.raw_content
+                        and not fetched.paper.raw_content
+                    )
+                ):
+                    return fallback.paper, fallback.reviews
+        return fetched.paper, fetched.reviews
     except Exception as exc:
         if api_version == "v2" and _is_not_found(exc):
-            return _fetch_paper_and_reviews_at(
+            fallback = _fetch_paper_and_reviews_at(
                 forum_id,
                 api_version="v1",
                 username=username,
                 password=password,
             )
+            return fallback.paper, fallback.reviews
         raise

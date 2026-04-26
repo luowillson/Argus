@@ -40,12 +40,12 @@ def search(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     sort: SortKey = Query(
-        default="score",
-        description="Sort results by score, novelty, technical, clarity, or impact",
+        default="relevance",
+        description="Sort results by relevance, score, novelty, technical, clarity, or impact",
     ),
     mode: SearchMode = Query(
         default="auto",
-        description="auto (default, sort by score) | topic (score) | specific (relevance)",
+        description="auto | topic | specific (relevance is the default sort for non-empty queries)",
     ),
 ) -> list[PaperOut]:
     """Search ingested papers by title/abstract text and semantic similarity."""

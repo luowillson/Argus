@@ -23,6 +23,7 @@ type Props = {
   totalPages?: number;
   activeSort?: SearchSortKey;
   sortLabel?: string;
+  sortExplicit?: boolean;
 };
 
 const DEBOUNCE_MS = 250;
@@ -38,6 +39,7 @@ export function SearchView({
   totalPages = 1,
   activeSort = "score",
   sortLabel = "Veros score",
+  sortExplicit = false,
 }: Props) {
   const router = useRouter();
 
@@ -55,11 +57,13 @@ export function SearchView({
   useEffect(() => {
     if (q === lastIssuedQ.current) return;
     const trimmed = q.trim();
+    const liveSort =
+      sortExplicit ? activeSort : trimmed ? "relevance" : "score";
     const controller = new AbortController();
     const handle = setTimeout(async () => {
       lastIssuedQ.current = q;
       try {
-        const dtos = await fetchSearchLive(trimmed, activeSort, controller.signal);
+        const dtos = await fetchSearchLive(trimmed, liveSort, controller.signal);
         const mapped = dtos.map(adaptPaperOut);
         // Live typing always re-enters topic mode and clears focus/notFound.
         setResults(mapped);
@@ -76,7 +80,7 @@ export function SearchView({
       clearTimeout(handle);
       controller.abort();
     };
-  }, [activeSort, q]);
+  }, [activeSort, q, sortExplicit]);
 
   async function handleSubmit(query: string) {
     if (!query.trim() || submitting) return;
@@ -103,7 +107,9 @@ export function SearchView({
   const totalCount =
     initialTotalCount ?? orderedResults.length + (showPendingCard ? 1 : 0);
   const effectiveSortLabel =
-    focusId && q.trim() ? "sorted by relevance" : `sorted by ${sortLabel}`;
+    q.trim() && activeSort === "relevance"
+      ? "sorted by relevance"
+      : `sorted by ${sortLabel}`;
 
   return (
     <div className="min-h-screen bg-paper">

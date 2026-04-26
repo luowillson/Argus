@@ -135,14 +135,20 @@ export const PaperOutSchema = z.object({
 });
 
 export type PaperOutDTO = z.infer<typeof PaperOutSchema>;
-export type SearchSortKey = "score" | "novelty" | "technical" | "clarity" | "impact";
+export type SearchSortKey =
+  | "relevance"
+  | "score"
+  | "novelty"
+  | "technical"
+  | "clarity"
+  | "impact";
 
 export async function fetchSearch(
   query: string,
   limit = 20,
   offset = 0,
   mode: "auto" | "topic" | "specific" = "auto",
-  sort: SearchSortKey = "score",
+  sort: SearchSortKey = "relevance",
 ): Promise<PaperOutDTO[]> {
   const params = new URLSearchParams({
     q: query,
@@ -161,7 +167,7 @@ export async function fetchSearch(
 /** Live (debounced) topic-mode fuzzy search; pass an AbortSignal to cancel in-flight calls. */
 export async function fetchSearchLive(
   query: string,
-  sort: SearchSortKey = "score",
+  sort: SearchSortKey = "relevance",
   signal?: AbortSignal,
 ): Promise<PaperOutDTO[]> {
   const params = new URLSearchParams({ q: query, mode: "topic", sort });

@@ -3,6 +3,7 @@ import type { SearchSortKey } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const SORT_OPTIONS: { key: SearchSortKey; label: string }[] = [
+  { key: "relevance", label: "Relevance" },
   { key: "score", label: "Veros score" },
   { key: "novelty", label: "Novelty" },
   { key: "technical", label: "Technical" },
@@ -18,16 +19,24 @@ type Props = {
 function hrefFor(query: string, sort: SearchSortKey): string {
   const params = new URLSearchParams();
   if (query) params.set("q", query);
-  if (sort !== "score") params.set("sort", sort);
+  if (query) {
+    params.set("sort", sort);
+  } else if (sort !== "score") {
+    params.set("sort", sort);
+  }
   const qs = params.toString();
   return qs ? `/search?${qs}` : "/search";
 }
 
 export function SortControl({ query, activeSort }: Props) {
+  const options = query
+    ? SORT_OPTIONS
+    : SORT_OPTIONS.filter((option) => option.key !== "relevance");
+
   return (
     <div className="flex flex-wrap items-center gap-2 font-sans text-[12px]">
       <span className="mr-1 text-muted">Sort by</span>
-      {SORT_OPTIONS.map((option) => {
+      {options.map((option) => {
         const active = option.key === activeSort;
         return (
           <Link

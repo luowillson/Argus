@@ -5,6 +5,7 @@ import { VEROS_PAPERS } from "@/lib/mock-papers";
 import type { Paper } from "@/lib/types";
 
 const SORT_LABELS: Record<SearchSortKey, string> = {
+  relevance: "relevance",
   score: "Veros score",
   novelty: "novelty",
   technical: "technical",
@@ -12,8 +13,13 @@ const SORT_LABELS: Record<SearchSortKey, string> = {
   impact: "impact",
 };
 
-function parseSort(value: string | undefined): SearchSortKey {
+function parseSort(
+  value: string | undefined,
+  hasQuery: boolean,
+): SearchSortKey {
   if (
+    value === "relevance" ||
+    value === "score" ||
     value === "novelty" ||
     value === "technical" ||
     value === "clarity" ||
@@ -21,7 +27,7 @@ function parseSort(value: string | undefined): SearchSortKey {
   ) {
     return value;
   }
-  return "score";
+  return hasQuery ? "relevance" : "score";
 }
 
 const PAGE_SIZE = 20;
@@ -47,7 +53,7 @@ export default async function SearchPage({
     pending,
   } = await searchParams;
   const query = q.trim();
-  const activeSort = parseSort(sort);
+  const activeSort = parseSort(sort, Boolean(query));
   const currentPage = Math.max(1, parseInt(pageParam, 10) || 1);
   const offset = (currentPage - 1) * PAGE_SIZE;
   const mode = focus ? "specific" : "topic";
@@ -80,6 +86,18 @@ export default async function SearchPage({
         })
       : VEROS_PAPERS;
     const sorted = [...all].sort((a, b) => {
+      if (activeSort === "relevance") {
+        const qn = query.toLowerCase();
+        const rank = (paper: Paper) => {
+          const title = paper.title.toLowerCase();
+          const abstract = paper.tldr.toLowerCase();
+          return (
+            (title.includes(qn) ? 2 : 0) +
+            (abstract.includes(qn) ? 1 : 0)
+          );
+        };
+        return rank(b) - rank(a) || (b.score ?? 0) - (a.score ?? 0);
+      }
       const left = activeSort === "score" ? (a.score ?? 0) : a[activeSort];
       const right = activeSort === "score" ? (b.score ?? 0) : b[activeSort];
       return right - left || (b.score ?? 0) - (a.score ?? 0);
@@ -109,6 +127,7 @@ export default async function SearchPage({
       totalPages={totalPages}
       activeSort={activeSort}
       sortLabel={SORT_LABELS[activeSort]}
+      sortExplicit={sort !== undefined || Boolean(query)}
     />
   );
 }

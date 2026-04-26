@@ -4,7 +4,8 @@ Strategy: combine (1) substring ILIKE with escaped wildcards, (2) pg_trgm
 ``word_similarity`` on title/abstract for fuzzy matching, (3) optional
 per-token fuzzy ORs for multi-word queries, and (4) pgvector cosine
 nearest-neighbour on query embeddings when available. De-duplicate by
-paper_id, fetch scores and AI insights, sort by Veros score descending.
+paper_id, fetch scores and AI insights, then sort either by text relevance
+or by a chosen Veros dimension.
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ _CANDIDATE_POOL = 50  # max IDs per channel before re-ranking by score
 _FUZZY_WORD_SIM_THRESHOLD = 0.16
 _MIN_TOKEN_LEN = 3
 _MAX_TOKENS = 5
-SortKey = Literal["score", "novelty", "technical", "clarity", "impact"]
-_SORT_KEYS: set[str] = {"score", "novelty", "technical", "clarity", "impact"}
+SortKey = Literal["relevance", "score", "novelty", "technical", "clarity", "impact"]
+_SORT_KEYS: set[str] = {"relevance", "score", "novelty", "technical", "clarity", "impact"}
 _DIMENSION_SORT_SQL = {
     "novelty": "novelty",
     "technical": "technical",
@@ -221,6 +222,9 @@ def _browse_candidate_ids(
     sort_by: SortKey = "score",
 ) -> list[str]:
     """Return browse-page IDs ranked globally by score or a standardized dimension."""
+    if sort_by == "relevance":
+        sort_by = "score"
+
     if sort_by == "score":
         order_expr = "s.score"
     else:
@@ -342,11 +346,11 @@ def search_papers(
     limit: int = 20,
     offset: int = 0,
     mode: SearchMode = "auto",
-    sort_by: SortKey = "score",
+    sort_by: SortKey = "relevance",
 ) -> list[PaperOut]:
     q = query.strip()
     if sort_by not in _SORT_KEYS:
-        sort_by = "score"
+        sort_by = "relevance"
     candidate_ids: list[str] = []
     candidate_ids_are_page = False
 
@@ -407,7 +411,7 @@ def search_papers(
         if pid in papers
     ]
 
-    if mode == "specific" and q:
+    if q and sort_by == "relevance":
         rel = _relevance_score(db, q, [r.id for r in results])
         results.sort(key=lambda x: rel.get(x.id, 0.0), reverse=True)
     else:
