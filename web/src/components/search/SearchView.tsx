@@ -106,7 +106,6 @@ export function SearchView({
     if (q === lastIssuedQ.current) return;
     const trimmed = q.trim();
     if (trimmed.length > 0 && trimmed.length < MIN_LIVE_QUERY_CHARS) return;
-
     const controller = new AbortController();
     const handle = setTimeout(async () => {
       lastIssuedQ.current = q;
@@ -159,7 +158,9 @@ export function SearchView({
     remoteTotalCount ?? orderedResults.length + (showPendingCard ? 1 : 0);
   const effectiveTotalPages = remoteTotalPages || totalPages;
   const effectiveSortLabel =
-    focusId && q.trim() ? "sorted by relevance" : `sorted by ${sortLabel}`;
+    q.trim() && activeSort === "relevance"
+      ? "sorted by relevance"
+      : `sorted by ${sortLabel}`;
 
   return (
     <div className="min-h-screen bg-paper">

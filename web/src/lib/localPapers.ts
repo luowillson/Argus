@@ -325,9 +325,10 @@ export async function searchLocalPapers(
   query: string,
   limit = 20,
   offset = 0,
-  mode: "auto" | "topic" | "specific" = "auto",
-  sort: SearchSortKey = "score",
+  _mode: "auto" | "topic" | "specific" = "auto",
+  sort: SearchSortKey = "relevance",
 ): Promise<SearchPageDTO> {
+  void _mode;
   const q = query.trim();
   const papers = await loadLocalPaperCorpus();
   const ranked = papers
@@ -335,7 +336,7 @@ export async function searchLocalPapers(
     .filter(({ relevance }) => !q || relevance > 0);
 
   ranked.sort((left, right) => {
-    if (mode === "specific" && q) {
+    if (q && sort === "relevance") {
       return right.relevance - left.relevance || (right.paper.score ?? 0) - (left.paper.score ?? 0);
     }
     return (
