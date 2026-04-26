@@ -1,5 +1,5 @@
 import { SearchView } from "@/components/search/SearchView";
-import { fetchSearch, fetchSearchCount, type SearchSortKey } from "@/lib/api";
+import { fetchSearchPage, type SearchSortKey } from "@/lib/api";
 import { adaptPaperOut } from "@/lib/adapt";
 import { VEROS_PAPERS } from "@/lib/mock-papers";
 import type { Paper } from "@/lib/types";
@@ -58,14 +58,11 @@ export default async function SearchPage({
   let fromApi = false;
 
   try {
-    const [dtos, total] = await Promise.all([
-      fetchSearch(query, PAGE_SIZE, offset, mode, activeSort),
-      fetchSearchCount(query),
-    ]);
-    if (total > 0 || dtos.length > 0) {
-      results = dtos.map(adaptPaperOut);
-      totalCount = total;
-      totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const page = await fetchSearchPage(query, PAGE_SIZE, offset, mode, activeSort);
+    if (page.total > 0 || page.results.length > 0) {
+      results = page.results.map(adaptPaperOut);
+      totalCount = page.total;
+      totalPages = Math.max(1, Math.ceil(page.total / PAGE_SIZE));
       fromApi = true;
     }
   } catch {
@@ -80,8 +77,8 @@ export default async function SearchPage({
         })
       : VEROS_PAPERS;
     const sorted = [...all].sort((a, b) => {
-      const left = activeSort === "score" ? (a.score ?? 0) : a[activeSort];
-      const right = activeSort === "score" ? (b.score ?? 0) : b[activeSort];
+      const left = activeSort === "score" ? (a.score ?? 0) : (a[activeSort] ?? 0);
+      const right = activeSort === "score" ? (b.score ?? 0) : (b[activeSort] ?? 0);
       return right - left || (b.score ?? 0) - (a.score ?? 0);
     });
     totalCount = sorted.length;

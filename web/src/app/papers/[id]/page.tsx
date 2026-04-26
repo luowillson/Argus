@@ -2,7 +2,8 @@ import { notFound } from "next/navigation";
 import { TopNav } from "@/components/nav/TopNav";
 import { PaperView } from "@/components/paper/PaperView";
 import { PaperPending } from "@/components/paper/PaperPending";
-import { fetchPaper, fetchSaved } from "@/lib/api";
+import { PaperToaster } from "@/components/paper/PaperToaster";
+import { fetchPaper, fetchSavedStatus } from "@/lib/api";
 import { adaptPaperDetail } from "@/lib/adapt";
 import { VEROS_PAPERS } from "@/lib/mock-papers";
 
@@ -16,12 +17,12 @@ export default async function PaperPage({
   let initialSaved = false;
 
   try {
-    const [paperResult, savedList] = await Promise.all([
+    const [paperResult, isSaved] = await Promise.all([
       fetchPaper(id),
-      fetchSaved().catch(() => []),
+      fetchSavedStatus(id).catch(() => false),
     ]);
     result = paperResult;
-    initialSaved = savedList.some((dto) => dto.id === id);
+    initialSaved = isSaved;
   } catch {
     // API unreachable — fall through to mock data so the page still renders.
   }
@@ -31,6 +32,7 @@ export default async function PaperPage({
       <div className="min-h-screen bg-paper text-ink">
         <TopNav />
         <PaperPending paperId={id} />
+        <PaperToaster />
       </div>
     );
   }
@@ -41,6 +43,7 @@ export default async function PaperPage({
       <div className="min-h-screen bg-paper text-ink">
         <TopNav />
         <PaperView paper={paper} aiReady={result.status === "ready"} initialSaved={initialSaved} />
+        <PaperToaster />
       </div>
     );
   }
@@ -52,6 +55,7 @@ export default async function PaperPage({
     <div className="min-h-screen bg-paper text-ink">
       <TopNav />
       <PaperView paper={mock} aiReady={true} initialSaved={false} />
+      <PaperToaster />
     </div>
   );
 }

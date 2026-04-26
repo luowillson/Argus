@@ -3,6 +3,18 @@ import { z } from "zod";
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
+const API_READ_TIMEOUT_MS = 3500;
+
+function withReadTimeout(init: RequestInit = {}): RequestInit {
+  if (init.signal) return init;
+  if (typeof AbortSignal.timeout === "function") {
+    return { ...init, signal: AbortSignal.timeout(API_READ_TIMEOUT_MS) };
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), API_READ_TIMEOUT_MS);
+  return { ...init, signal: controller.signal };
+}
+
 const VerdictSchema = z.enum([
   "Strong Accept",
   "Accept",
@@ -72,10 +84,10 @@ export async function fetchPaper(
   paperId: string,
   init?: RequestInit,
 ): Promise<PaperDetailDTO | "queued" | "failed" | null> {
-  const res = await fetch(`${API_BASE_URL}/papers/${paperId}`, {
+  const res = await fetch(`${API_BASE_URL}/papers/${paperId}`, withReadTimeout({
     cache: "no-store",
     ...init,
-  });
+  }));
   if (res.status === 404) return null;
   if (res.status === 410) return "failed";
   if (res.status === 202) return "queued";
@@ -88,9 +100,9 @@ export async function fetchPaper(
 export async function fetchPaperStatus(
   paperId: string,
 ): Promise<PaperStatusDTO> {
-  const res = await fetch(`${API_BASE_URL}/papers/${paperId}/status`, {
+  const res = await fetch(`${API_BASE_URL}/papers/${paperId}/status`, withReadTimeout({
     cache: "no-store",
-  });
+  }));
   if (!res.ok) {
     throw new Error(`API error ${res.status} fetching status for ${paperId}`);
   }
@@ -137,6 +149,13 @@ export const PaperOutSchema = z.object({
 export type PaperOutDTO = z.infer<typeof PaperOutSchema>;
 export type SearchSortKey = "score" | "novelty" | "technical" | "clarity" | "impact";
 
+const SearchPageSchema = z.object({
+  results: z.array(PaperOutSchema),
+  total: z.number(),
+});
+
+export type SearchPageDTO = z.infer<typeof SearchPageSchema>;
+
 export async function fetchSearch(
   query: string,
   limit = 20,
@@ -151,11 +170,38 @@ export async function fetchSearch(
     mode,
     sort,
   });
-  const res = await fetch(`${API_BASE_URL}/search?${params}`, { cache: "no-store" });
+  const res = await fetch(
+    `${API_BASE_URL}/search?${params}`,
+    withReadTimeout({ cache: "no-store" }),
+  );
   if (!res.ok) {
     throw new Error(`Search API error ${res.status}`);
   }
   return z.array(PaperOutSchema).parse(await res.json());
+}
+
+export async function fetchSearchPage(
+  query: string,
+  limit = 20,
+  offset = 0,
+  mode: "auto" | "topic" | "specific" = "auto",
+  sort: SearchSortKey = "score",
+): Promise<SearchPageDTO> {
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(limit),
+    offset: String(offset),
+    mode,
+    sort,
+  });
+  const res = await fetch(
+    `${API_BASE_URL}/search/page?${params}`,
+    withReadTimeout({ cache: "no-store" }),
+  );
+  if (!res.ok) {
+    throw new Error(`Search API error ${res.status}`);
+  }
+  return SearchPageSchema.parse(await res.json());
 }
 
 /** Live (debounced) topic-mode fuzzy search; pass an AbortSignal to cancel in-flight calls. */
@@ -165,10 +211,10 @@ export async function fetchSearchLive(
   signal?: AbortSignal,
 ): Promise<PaperOutDTO[]> {
   const params = new URLSearchParams({ q: query, mode: "topic", sort });
-  const res = await fetch(`${API_BASE_URL}/search?${params}`, {
+  const res = await fetch(`${API_BASE_URL}/search?${params}`, withReadTimeout({
     cache: "no-store",
     signal,
-  });
+  }));
   if (!res.ok) {
     throw new Error(`Search API error ${res.status}`);
   }
@@ -209,16 +255,35 @@ export async function lookupSearch(query: string): Promise<SearchLookupResponse>
 
 export async function fetchSearchCount(query: string): Promise<number> {
   const params = new URLSearchParams({ q: query });
-  const res = await fetch(`${API_BASE_URL}/search/count?${params}`, { cache: "no-store" });
+  const res = await fetch(
+    `${API_BASE_URL}/search/count?${params}`,
+    withReadTimeout({ cache: "no-store" }),
+  );
   if (!res.ok) return 0;
   const data = z.object({ total: z.number() }).parse(await res.json());
   return data.total;
 }
 
 export async function fetchSaved(init?: RequestInit): Promise<PaperOutDTO[]> {
-  const res = await fetch(`${API_BASE_URL}/saved`, { cache: "no-store", ...init });
+  const res = await fetch(
+    `${API_BASE_URL}/saved`,
+    withReadTimeout({ cache: "no-store", ...init }),
+  );
   if (!res.ok) throw new Error(`Saved API error ${res.status}`);
   return z.array(PaperOutSchema).parse(await res.json());
+}
+
+export async function fetchSavedStatus(
+  paperId: string,
+  init?: RequestInit,
+): Promise<boolean> {
+  const res = await fetch(
+    `${API_BASE_URL}/saved/${encodeURIComponent(paperId)}`,
+    withReadTimeout({ cache: "no-store", ...init }),
+  );
+  if (!res.ok) return false;
+  const data = z.object({ saved: z.boolean() }).parse(await res.json());
+  return data.saved;
 }
 
 export async function savePaper(paperId: string): Promise<void> {

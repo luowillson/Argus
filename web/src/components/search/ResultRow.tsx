@@ -1,6 +1,4 @@
-"use client";
-
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import type { Paper } from "@/lib/types";
 import { cn, scoreColor } from "@/lib/utils";
 import { MetricsCell } from "./MetricsCell";
@@ -11,24 +9,24 @@ type Props = {
 };
 
 export function ResultRow({ paper, isFirst }: Props) {
-  const router = useRouter();
   const dest = `/papers/${paper.id}`;
   const score = paper.score;
 
   return (
     <div
-      role="link"
-      tabIndex={0}
-      onClick={() => router.push(dest)}
-      onKeyDown={(e) => e.key === "Enter" && router.push(dest)}
       className={cn(
-        "grid cursor-pointer items-start gap-5 border-b border-rule-soft py-5 transition hover:bg-cream/40",
+        "group relative grid cursor-pointer items-start gap-5 border-b border-rule-soft py-5 transition hover:bg-cream/40",
         "grid-cols-[92px_minmax(0,1.55fr)_150px_220px]",
         isFirst && "border-t border-rule",
       )}
     >
+      <Link
+        href={dest}
+        aria-label={`Open ${paper.title}`}
+        className="absolute inset-0 z-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-burgundy"
+      />
       {/* Score */}
-      <div>
+      <div className="pointer-events-none relative z-10">
         <div className="mt-0.5 flex items-baseline gap-1.5">
           <div
             className={cn(
@@ -43,7 +41,7 @@ export function ResultRow({ paper, isFirst }: Props) {
       </div>
 
       {/* Paper */}
-      <div>
+      <div className="pointer-events-none relative z-10">
         <div className="text-[18px] font-medium leading-snug text-burgundy">
           {paper.title}
         </div>
@@ -58,8 +56,7 @@ export function ResultRow({ paper, isFirst }: Props) {
             href={`https://openreview.net/forum?id=${encodeURIComponent(paper.id)}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="cursor-pointer hover:text-burgundy"
-            onClick={(e) => e.stopPropagation()}
+            className="pointer-events-auto relative z-20 cursor-pointer hover:text-burgundy"
           >
             openreview:{paper.id}
           </a>
@@ -70,12 +67,12 @@ export function ResultRow({ paper, isFirst }: Props) {
       </div>
 
       {/* Venue */}
-      <div className="pt-1">
+      <div className="pointer-events-none relative z-10 pt-1">
         <div className="text-[14px] font-medium text-prose">{paper.venue}</div>
       </div>
 
       {/* Metrics — numbers only, no bars */}
-      <div className="pt-1">
+      <div className="pointer-events-none relative z-10 pt-1">
         <MetricsCell
           novelty={paper.novelty}
           technical={paper.technical}

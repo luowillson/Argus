@@ -214,6 +214,42 @@ def _has_embeddings(db: Session) -> bool:
     return bool(row and row[0])
 
 
+def _semantic_candidate_ids(db: Session, q: str) -> list[str]:
+    if not q.strip() or not _has_embeddings(db):
+        return []
+
+    from app.services.embeddings.factory import get_embedding_provider
+
+    provider = get_embedding_provider()
+    embedding = provider.encode([q])[0]
+    vec_str = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
+    sql = sa_text(
+        "SELECT paper_id FROM paper_embeddings "
+        "ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :n"
+    )
+    rows = db.execute(sql, {"vec": vec_str, "n": _CANDIDATE_POOL}).fetchall()
+    return [r[0] for r in rows]
+
+
+def _dedupe_ids(candidate_ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique_ids: list[str] = []
+    for pid in candidate_ids:
+        if pid not in seen:
+            seen.add(pid)
+            unique_ids.append(pid)
+    return unique_ids
+
+
+def _query_candidate_ids(db: Session, q: str) -> list[str]:
+    candidate_ids = list(_fuzzy_text_candidate_ids(db, q))
+    try:
+        candidate_ids.extend(_semantic_candidate_ids(db, q))
+    except Exception:
+        logger.debug("Vector search skipped (provider unavailable or no embeddings).")
+    return _dedupe_ids(candidate_ids)
+
+
 def _browse_candidate_ids(
     db: Session,
     limit: int,
@@ -309,78 +345,7 @@ def _relevance_score(db: Session, q: str, paper_ids: list[str]) -> dict[str, flo
     return {str(r[0]): float(r[1] or 0.0) + (0.25 if r[2] else 0.0) for r in rows}
 
 
-def count_papers(db: Session, query: str) -> int:
-    """Return total result count for the given query (used for pagination)."""
-    q = query.strip()
-    if not q:
-        return db.exec(select(func.count(Paper.id))).one()  # type: ignore[return-value]
-
-    # Collect all candidates (no slice) and return unique count.
-    candidate_ids: list[str] = list(_fuzzy_text_candidate_ids(db, q))
-    try:
-        if _has_embeddings(db):
-            from app.services.embeddings.factory import get_embedding_provider
-
-            provider = get_embedding_provider()
-            embedding = provider.encode([q])[0]
-            vec_str = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
-            sql = sa_text(
-                "SELECT paper_id FROM paper_embeddings "
-                "ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :n"
-            )
-            rows = db.execute(sql, {"vec": vec_str, "n": _CANDIDATE_POOL}).fetchall()
-            candidate_ids.extend(r[0] for r in rows)
-    except Exception:
-        pass
-
-    return len(set(candidate_ids))
-
-
-def search_papers(
-    db: Session,
-    query: str,
-    limit: int = 20,
-    offset: int = 0,
-    mode: SearchMode = "auto",
-    sort_by: SortKey = "score",
-) -> list[PaperOut]:
-    q = query.strip()
-    if sort_by not in _SORT_KEYS:
-        sort_by = "score"
-    candidate_ids: list[str] = []
-    candidate_ids_are_page = False
-
-    if not q:
-        candidate_ids = _browse_candidate_ids(db, limit, offset, sort_by)
-        candidate_ids_are_page = True
-    else:
-        candidate_ids.extend(_fuzzy_text_candidate_ids(db, q))
-
-        try:
-            if not _has_embeddings(db):
-                raise RuntimeError("no paper embeddings indexed")
-
-            from app.services.embeddings.factory import get_embedding_provider
-
-            provider = get_embedding_provider()
-            embedding = provider.encode([q])[0]
-            vec_str = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
-            sql = sa_text(
-                "SELECT paper_id FROM paper_embeddings "
-                "ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :n"
-            )
-            rows = db.execute(sql, {"vec": vec_str, "n": _CANDIDATE_POOL}).fetchall()
-            candidate_ids.extend(r[0] for r in rows)
-        except Exception:
-            logger.debug("Vector search skipped (provider unavailable or no embeddings).")
-
-    seen: set[str] = set()
-    unique_ids: list[str] = []
-    for pid in candidate_ids:
-        if pid not in seen:
-            seen.add(pid)
-            unique_ids.append(pid)
-
+def _build_results_for_ids(db: Session, unique_ids: list[str]) -> list[PaperOut]:
     if not unique_ids:
         return []
 
@@ -401,29 +366,85 @@ def search_papers(
         ).all()
     }
 
-    results = [
+    return [
         build_paper_out(papers[pid], scores.get(pid), insights.get(pid))
         for pid in unique_ids
         if pid in papers
     ]
 
+
+def _sort_results(
+    db: Session,
+    q: str,
+    results: list[PaperOut],
+    mode: SearchMode,
+    sort_by: SortKey,
+) -> None:
     if mode == "specific" and q:
         rel = _relevance_score(db, q, [r.id for r in results])
         results.sort(key=lambda x: rel.get(x.id, 0.0), reverse=True)
-    else:
-        results.sort(
-            key=lambda x: (
-                getattr(x, sort_by) if getattr(x, sort_by) is not None else 0.0,
-                x.score or 0.0,
-            ),
-            reverse=True,
-        )
+        return
 
-    if candidate_ids_are_page:
-        return results
+    results.sort(
+        key=lambda x: (
+            getattr(x, sort_by) if getattr(x, sort_by) is not None else 0.0,
+            x.score or 0.0,
+        ),
+        reverse=True,
+    )
 
-    # Empty-query browse: DB already applied OFFSET/LIMIT, so return as-is.
-    # Non-empty query: candidates were collected in bulk; slice here for the page.
+
+def count_papers(db: Session, query: str) -> int:
+    """Return total result count for the given query (used for pagination)."""
+    q = query.strip()
     if not q:
+        return db.exec(select(func.count(Paper.id))).one()  # type: ignore[return-value]
+
+    return len(_query_candidate_ids(db, q))
+
+
+def search_papers(
+    db: Session,
+    query: str,
+    limit: int = 20,
+    offset: int = 0,
+    mode: SearchMode = "auto",
+    sort_by: SortKey = "score",
+) -> list[PaperOut]:
+    q = query.strip()
+    if sort_by not in _SORT_KEYS:
+        sort_by = "score"
+
+    if not q:
+        results = _build_results_for_ids(
+            db, _browse_candidate_ids(db, limit, offset, sort_by)
+        )
+        _sort_results(db, q, results, mode, sort_by)
         return results
+
+    results = _build_results_for_ids(db, _query_candidate_ids(db, q))
+    _sort_results(db, q, results, mode, sort_by)
     return results[offset : offset + limit]
+
+
+def search_papers_with_total(
+    db: Session,
+    query: str,
+    limit: int = 20,
+    offset: int = 0,
+    mode: SearchMode = "auto",
+    sort_by: SortKey = "score",
+) -> tuple[list[PaperOut], int]:
+    q = query.strip()
+    if sort_by not in _SORT_KEYS:
+        sort_by = "score"
+
+    if not q:
+        total = db.exec(select(func.count(Paper.id))).one()
+        return search_papers(
+            db, q, limit=limit, offset=offset, mode=mode, sort_by=sort_by
+        ), int(total)
+
+    results = _build_results_for_ids(db, _query_candidate_ids(db, q))
+    _sort_results(db, q, results, mode, sort_by)
+    return results[offset : offset + limit], len(results)
