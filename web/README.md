@@ -47,6 +47,25 @@ To refresh ingested papers with the team, point the FastAPI backend's
 `api/.env` `DATABASE_URL` at the shared pgvector Postgres database, run
 `make db-migrate` from the repo root, then regenerate the static corpus.
 
+To fetch a batch of papers from OpenReview into Postgres, run the backend script
+from `api/`:
+
+```bash
+cd ../api
+uv run python scripts/ingest_openreview_venue.py \
+  --venue ICLR.cc/2025/Conference \
+  --limit 5 \
+  --skip-analysis
+```
+
+Remove `--limit 5` for the full venue. The script skips existing papers by
+default; add `--force` only when you want to refresh them. After importing,
+rerun `uv run python scripts/export_static_corpus.py` so the web app's local
+search JSON includes the new papers. If the import is interrupted, rerun the
+same command; already-imported papers will be skipped. Each paper has a
+180-second timeout by default so one slow OpenReview response cannot freeze the
+whole run.
+
 ## Routes
 
 | Route | Purpose |

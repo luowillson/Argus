@@ -91,7 +91,7 @@ def _upsert_review(db: Session, paper_id: str, review: FetchedReview) -> None:
     db.exec(stmt)
 
 
-def ingest_paper(db: Session, forum_id: str) -> dict[str, object]:
+def ingest_paper(db: Session, forum_id: str, *, run_analysis: bool = True) -> dict[str, object]:
     """Fetch a paper + reviews from OpenReview and upsert into Postgres.
 
     Returns a small status dict so the caller can surface counts to the user.
@@ -114,17 +114,21 @@ def ingest_paper(db: Session, forum_id: str) -> dict[str, object]:
 
     analyze_status: str
     analyze_error: str | None = None
-    try:
-        analyze_paper(db, paper.id)
-        analyze_status = "ready"
-    except AnalyzeError as exc:
+    if run_analysis:
+        try:
+            analyze_paper(db, paper.id)
+            analyze_status = "ready"
+        except AnalyzeError as exc:
+            analyze_status = "skipped"
+            analyze_error = str(exc)
+            logger.warning("analyze skipped for %s: %s", paper.id, exc)
+        except Exception as exc:  # network / auth / parse failure
+            analyze_status = "failed"
+            analyze_error = f"{type(exc).__name__}: {exc}"
+            logger.exception("analyze failed for %s", paper.id)
+    else:
         analyze_status = "skipped"
-        analyze_error = str(exc)
-        logger.warning("analyze skipped for %s: %s", paper.id, exc)
-    except Exception as exc:  # network / auth / parse failure
-        analyze_status = "failed"
-        analyze_error = f"{type(exc).__name__}: {exc}"
-        logger.exception("analyze failed for %s", paper.id)
+        analyze_error = "analysis disabled"
 
     logger.info(
         "ingested paper %s: %d reviews, acceptance=%s, score=%s, analyze=%s",

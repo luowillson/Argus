@@ -106,6 +106,42 @@ If the paper isn't in the database the API returns 202, the Celery worker fetche
 curl -X POST http://localhost:8000/api/v1/papers/F76bwRSLeK/ingest
 ```
 
+## Bulk ingest papers from OpenReview
+
+Use this when you want to fetch a whole OpenReview venue and add the papers to
+Postgres automatically. Run it from `api/` so it uses `api/.env`.
+
+Start with a small test:
+
+```bash
+cd api
+uv run python scripts/ingest_openreview_venue.py \
+  --venue ICLR.cc/2025/Conference \
+  --limit 5 \
+  --skip-analysis
+```
+
+If that looks good, remove `--limit` to ingest the venue:
+
+```bash
+uv run python scripts/ingest_openreview_venue.py \
+  --venue ICLR.cc/2025/Conference \
+  --skip-analysis
+```
+
+By default, the script skips papers already in the database. Add `--force` only
+when you want to re-fetch and update existing papers. Remove `--skip-analysis`
+if you also want the LLM summaries generated during the import.
+If the script is interrupted, rerun the same command; already-imported papers
+will be skipped. Each paper has a 180-second timeout by default so one slow
+OpenReview response cannot freeze the whole run.
+
+After a bulk ingest, refresh the browser's local search corpus:
+
+```bash
+uv run python scripts/export_static_corpus.py
+```
+
 ---
 
 ## Creating a local database from repo data
