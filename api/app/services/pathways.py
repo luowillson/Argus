@@ -384,6 +384,78 @@ def _stage_prompt(seed_label: str, seed_text: str, anchors: list[str]) -> str:
     )
 
 
+def _strip_code_fence(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    return cleaned
+
+
+def _extract_first_json_object(text: str) -> str:
+    start = text.find("{")
+    if start == -1:
+        return text.strip()
+
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1].strip()
+
+    return text[start:].strip()
+
+
+def _parse_stage_plan_json(raw_text: str) -> dict[str, Any]:
+    cleaned = _strip_code_fence(raw_text)
+    if not cleaned:
+        raise ValueError("empty LLM response")
+
+    parse_errors: list[str] = []
+    for candidate in (cleaned, _extract_first_json_object(cleaned)):
+        if not candidate:
+            continue
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            parse_errors.append(str(exc))
+
+    raise ValueError("; ".join(parse_errors) or "LLM returned invalid JSON")
+
+
+def _stage_repair_prompt(raw_text: str) -> str:
+    return "\n".join(
+        [
+            "Repair the following into valid JSON only.",
+            "Return exactly one JSON object with keys: title, rationale, stages.",
+            "Each stage must have: stage, purpose, search_query, anchor_concepts.",
+            "Do not include markdown fences or explanatory text.",
+            raw_text[:6000],
+        ]
+    )
+
+
 def _infer_stage_plan(seed_label: str, seed_text: str, anchors: list[str]) -> tuple[_StagePlanOut, str | None]:
     provider = make_llm_provider()
     response = provider.complete_json(
@@ -391,7 +463,21 @@ def _infer_stage_plan(seed_label: str, seed_text: str, anchors: list[str]) -> tu
         user=_stage_prompt(seed_label, seed_text, anchors),
         max_output_tokens=2200,
     )
-    parsed = _StagePlanOut.model_validate(json.loads(response.text))
+    model = response.model
+    try:
+        parsed_json = _parse_stage_plan_json(response.text)
+    except ValueError as exc:
+        logger.warning("stage planner returned non-JSON; requesting repair: %s", exc)
+        repair = provider.complete_json(
+            system="You repair malformed model output into valid JSON.",
+            user=_stage_repair_prompt(response.text),
+            max_output_tokens=2200,
+            temperature=0.0,
+        )
+        model = repair.model or model
+        parsed_json = _parse_stage_plan_json(repair.text)
+
+    parsed = _StagePlanOut.model_validate(parsed_json)
     cleaned_stages = []
     for stage in parsed.stages:
         cleaned_anchors = _clean_anchor_list(stage.anchor_concepts)
@@ -409,7 +495,7 @@ def _infer_stage_plan(seed_label: str, seed_text: str, anchors: list[str]) -> tu
         )
     if len(cleaned_stages) < 4:
         raise ValueError("LLM returned too few valid stages")
-    return parsed.model_copy(update={"stages": cleaned_stages}), response.model
+    return parsed.model_copy(update={"stages": cleaned_stages}), model
 
 
 def _build_candidate_pool(

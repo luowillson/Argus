@@ -1,13 +1,13 @@
 """learning pathway tables
 
-Revision ID: 0002
+Revision ID: 0002_learning_pathways
 Revises: 0001
 Create Date: 2026-04-25
 """
 
 from alembic import op
 
-revision = "0002"
+revision = "0002_learning_pathways"
 down_revision = "0001"
 branch_labels = None
 depends_on = None

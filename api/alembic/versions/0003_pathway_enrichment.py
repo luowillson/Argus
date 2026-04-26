@@ -1,14 +1,14 @@
 """pathway enrichment metadata
 
-Revision ID: 0003
-Revises: 0002
+Revision ID: 0003_pathway_enrichment
+Revises: 0002_learning_pathways
 Create Date: 2026-04-25
 """
 
 from alembic import op
 
-revision = "0003"
-down_revision = "0002"
+revision = "0003_pathway_enrichment"
+down_revision = "0002_learning_pathways"
 branch_labels = None
 depends_on = None
 
