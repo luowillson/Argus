@@ -19,7 +19,7 @@ from app.schemas.paper import Verdict
 logger = logging.getLogger(__name__)
 
 _SEED_POOL_SIZE = 500
-_TOPIC_NODE_COUNT = 500
+_TOPIC_NODE_COUNT = 1000
 _LOCAL_SIMILARITY_WINDOW = 32
 _MAX_EXTRA_NEIGHBORS_PER_NODE = 3
 _EXTRA_EDGE_SIMILARITY = 0.5

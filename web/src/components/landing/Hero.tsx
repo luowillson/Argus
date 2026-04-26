@@ -8,7 +8,8 @@ export function Hero() {
         Open peer review, distilled
       </div>
       <h1 className="mt-5 max-w-[880px] text-[50px] leading-[1.02] font-normal tracking-[-0.02em] sm:text-[62px] xl:text-[76px]">
-        Read the papers{" "}
+        Read the papers
+        <br />
         <em className="font-serif italic text-burgundy">worth reading.</em>
       </h1>
       <p className="mt-6 max-w-[600px] font-serif text-[18px] leading-[1.55] text-prose-soft xl:text-[19px]">
@@ -28,10 +29,10 @@ export function Hero() {
         </Link>
         ,{" "}
         <Link
-          href="/search?q=Sparse%20Autoencoders"
+          href="/search?q=Diffusion%20Transformers"
           className="cursor-pointer text-burgundy underline underline-offset-2"
         >
-          &ldquo;Sparse Autoencoders&rdquo;
+          &ldquo;Diffusion Transformers&rdquo;
         </Link>
         , or paste a forum URL.
       </div>

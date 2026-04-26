@@ -1,35 +1,32 @@
 "use client";
 
-import { startTransition, useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import * as THREE from "three";
 import type { LandingGraphDTO } from "@/lib/api";
 
 const WIDTH = 1180;
 const HEIGHT = 920;
-const CENTER_X = WIDTH / 2 - 34;
-const CENTER_Y = HEIGHT / 2 + 6;
-const GRAPH_RADIUS = 414;
-const LABEL_COUNT = 3;
 const CLUSTER_COUNT = 8;
-const FRAME_INTERVAL_MS = 50;
 const PALETTE = [
-  "#7a1c1c",
-  "#2f6b47",
-  "#8d6b14",
-  "#4f7397",
-  "#7b5a89",
-  "#74833f",
-  "#b86a42",
-  "#4f9b8a",
+  "#c73737",
+  "#2fa66f",
+  "#c99a21",
+  "#3269b8",
+  "#a762bf",
+  "#8da832",
+  "#dc7a44",
+  "#2fb2a0",
 ];
 
 type Props = {
   graph: LandingGraphDTO;
 };
 
-type Vec2 = {
+type Vec3 = {
   x: number;
   y: number;
+  z: number;
 };
 
 type LayoutNode = LandingGraphDTO["nodes"][number] & {
@@ -39,59 +36,146 @@ type LayoutNode = LandingGraphDTO["nodes"][number] & {
   clusterSize: number;
   x: number;
   y: number;
+  z: number;
   phase: number;
-  drift: number;
-  color: string;
-};
-
-type FrameNode = LayoutNode & {
-  drawX: number;
-  drawY: number;
   radius: number;
-  glowRadius: number;
+  color: string;
 };
 
 type Layout = {
   nodes: LayoutNode[];
   edges: LandingGraphDTO["edges"];
   neighbors: Map<string, Set<string>>;
-  clusterCenters: Vec2[];
+  nodeById: Map<string, LayoutNode>;
+  nodeIndex: Map<string, number>;
+  incidentEdges: Map<string, number[]>;
+  maxIncidentEdges: number;
+};
+
+type GraphSceneState = {
+  layout: Layout;
+  renderer: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  group: THREE.Group;
+  nodesMesh: THREE.InstancedMesh;
+  hitMesh: THREE.InstancedMesh;
+  edgeLines: THREE.LineSegments;
+  activeLines: THREE.LineSegments;
+  activeLinePositions: Float32Array;
+  raycaster: THREE.Raycaster;
+  pointer: THREE.Vector2;
+  dummy: THREE.Object3D;
+  baseColors: THREE.Color[];
+  hoverColors: THREE.Color[];
+  hoveredId: string | null;
+  animationFrame: number;
+  destroyed: boolean;
 };
 
 export function SemanticGraphCanvas({ graph }: Props) {
   const router = useRouter();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const layoutRef = useRef<Layout>(createLayout(graph));
-  const frameNodesRef = useRef<FrameNode[]>([]);
-  const hoveredIdRef = useRef<string | null>(null);
-  const hoveredNodeRef = useRef<FrameNode | null>(null);
+  const sceneStateRef = useRef<GraphSceneState | null>(null);
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
-  const [hoveredNode, setHoveredNode] = useState<FrameNode | null>(null);
-
-  useEffect(() => {
-    layoutRef.current = createLayout(graph);
-  }, [graph]);
+  const hoveredIdRef = useRef<string | null>(null);
+  const [hoveredNode, setHoveredNode] = useState<LayoutNode | null>(null);
+  const layout = useMemo(() => createLayout(graph), [graph]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const context = canvas.getContext("2d", { alpha: true, desynchronized: true });
-    if (!context) return;
 
-    let frame = 0;
-    let lastPaint = 0;
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      alpha: true,
+      antialias: true,
+      powerPreference: "high-performance",
+    });
+    renderer.setClearColor(0x000000, 0);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
 
-    const render = (now: number) => {
-      frame = window.requestAnimationFrame(render);
-      if (now - lastPaint < FRAME_INTERVAL_MS) return;
-      lastPaint = now;
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(42, WIDTH / HEIGHT, 1, 2200);
+    camera.position.set(0, 0, 860);
 
-      paintScene(context, canvas, layoutRef.current, now, hoveredIdRef.current, frameNodesRef);
+    const group = new THREE.Group();
+    group.rotation.x = -0.1;
+    scene.add(group);
+
+    const objects = createSceneObjects(layout);
+    group.add(objects.edgeLines, objects.activeLines, objects.nodesMesh, objects.hitMesh);
+
+    const state: GraphSceneState = {
+      layout,
+      renderer,
+      scene,
+      camera,
+      group,
+      ...objects,
+      raycaster: new THREE.Raycaster(),
+      pointer: new THREE.Vector2(),
+      dummy: new THREE.Object3D(),
+      hoveredId: null,
+      animationFrame: 0,
+      destroyed: false,
+    };
+    sceneStateRef.current = state;
+
+    const resize = () => {
+      const width = Math.max(1, canvas.clientWidth);
+      const height = Math.max(1, canvas.clientHeight);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
     };
 
-    frame = window.requestAnimationFrame(render);
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
+    const render = (now: number) => {
+      if (state.destroyed) return;
+      state.animationFrame = window.requestAnimationFrame(render);
+      resize();
+
+      const time = now * 0.001;
+      group.rotation.y = time * 0.1;
+      group.rotation.x = -0.1 + Math.sin(time * 0.24) * 0.085;
+      group.rotation.z = Math.sin(time * 0.16) * 0.03;
+      group.updateMatrixWorld();
+
+      const pointer = pointerRef.current;
+      if (pointer) {
+        state.pointer.set(pointer.x, pointer.y);
+        state.raycaster.setFromCamera(state.pointer, camera);
+        const hit = state.raycaster.intersectObject(state.hitMesh, false)[0];
+        const nextId =
+          hit?.instanceId == null ? null : (layout.nodes[hit.instanceId]?.id ?? null);
+        applyHover(state, nextId, hoveredIdRef, setHoveredNode);
+      } else {
+        applyHover(state, null, hoveredIdRef, setHoveredNode);
+      }
+
+      renderer.render(scene, camera);
+    };
+
+    resize();
+    state.animationFrame = window.requestAnimationFrame(render);
+
+    return () => {
+      state.destroyed = true;
+      window.cancelAnimationFrame(state.animationFrame);
+      sceneStateRef.current = null;
+      hoveredIdRef.current = null;
+      setHoveredNode(null);
+      objects.nodesMesh.geometry.dispose();
+      objects.hitMesh.geometry.dispose();
+      objects.edgeLines.geometry.dispose();
+      objects.activeLines.geometry.dispose();
+      disposeMaterial(objects.nodesMesh.material);
+      disposeMaterial(objects.hitMesh.material);
+      disposeMaterial(objects.edgeLines.material);
+      disposeMaterial(objects.activeLines.material);
+      renderer.dispose();
+    };
+  }, [layout]);
 
   function openPaper(paperId: string) {
     startTransition(() => {
@@ -100,21 +184,17 @@ export function SemanticGraphCanvas({ graph }: Props) {
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
-    const point = canvasPoint(event);
-    pointerRef.current = point;
-    const hit = findHoveredNode(point, frameNodesRef.current);
-    if (hit?.id !== hoveredIdRef.current) {
-      hoveredIdRef.current = hit?.id ?? null;
-      hoveredNodeRef.current = hit ?? null;
-      setHoveredNode(hit ?? null);
-    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    pointerRef.current = {
+      x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      y: -(((event.clientY - rect.top) / rect.height) * 2 - 1),
+    };
   }
 
   function handlePointerLeave() {
     pointerRef.current = null;
-    hoveredIdRef.current = null;
-    hoveredNodeRef.current = null;
-    setHoveredNode(null);
+    const state = sceneStateRef.current;
+    if (state) applyHover(state, null, hoveredIdRef, setHoveredNode);
   }
 
   function handleClick() {
@@ -203,8 +283,14 @@ function createLayout(graph: LandingGraphDTO): Layout {
     const clusterSize = clusterBuckets.get(cluster)?.length ?? 1;
     const center = clusterCenters[cluster % clusterCenters.length];
     const slot = clusterSlots.get(node.id) ?? 0;
-    const angle = slot * 2.3999632297 + (hashString(node.id) % 37) * 0.07;
-    const localRadius = Math.min(150, 24 + Math.sqrt(slot) * (8.8 + Math.min(clusterSize, 90) * 0.02));
+    const hash = hashString(node.id);
+    const angle = slot * 2.3999632297 + (hash % 53) * 0.053;
+    const localRadius = Math.min(
+      98,
+      16 + Math.sqrt(slot) * (6.55 + Math.min(clusterSize, 120) * 0.011),
+    );
+    const depthJitter = (((hashString(`z:${node.id}`) % 1000) / 1000) - 0.5) * 72;
+    const radius = 3.15 + Math.min(degrees.get(node.id) ?? 0, 12) * 0.1 + (node.score ?? 0) * 0.035;
 
     return {
       ...node,
@@ -213,21 +299,40 @@ function createLayout(graph: LandingGraphDTO): Layout {
       cluster,
       clusterSize,
       x: center.x + Math.cos(angle) * localRadius,
-      y: center.y + Math.sin(angle) * localRadius,
+      y: center.y + Math.sin(angle) * localRadius * 0.72,
+      z: center.z + depthJitter,
       phase: (hashString(`p:${node.id}`) % 628) / 100,
-      drift: 0.5 + (hashString(`d:${node.id}`) % 7) * 0.06,
+      radius,
       color: PALETTE[cluster % PALETTE.length],
     };
   });
 
   relaxLayout(nodes, graph.edges, weights, clusterCenters);
-  normalizeToCircle(nodes);
+  normalizeToVolume(nodes);
+
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const nodeIndex = new Map(nodes.map((node, index) => [node.id, index]));
+  const incidentEdges = new Map<string, number[]>();
+  for (const node of nodes) incidentEdges.set(node.id, []);
+
+  graph.edges.forEach((edge, index) => {
+    incidentEdges.get(edge.source)?.push(index);
+    incidentEdges.get(edge.target)?.push(index);
+  });
+
+  let maxIncidentEdges = 1;
+  for (const edgeIndexes of incidentEdges.values()) {
+    maxIncidentEdges = Math.max(maxIncidentEdges, edgeIndexes.length);
+  }
 
   return {
     nodes,
     edges: graph.edges,
     neighbors,
-    clusterCenters,
+    nodeById,
+    nodeIndex,
+    incidentEdges,
+    maxIncidentEdges,
   };
 }
 
@@ -235,16 +340,19 @@ function relaxLayout(
   nodes: LayoutNode[],
   edges: LandingGraphDTO["edges"],
   weights: Map<string, Map<string, number>>,
-  clusterCenters: Vec2[],
+  clusterCenters: Vec3[],
 ) {
   const nodeIndex = new Map(nodes.map((node, index) => [node.id, index]));
-  const velocities = nodes.map(() => ({ x: 0, y: 0 }));
-  const maxRadius = GRAPH_RADIUS * 0.94;
+  const velocities = nodes.map(() => ({ x: 0, y: 0, z: 0 }));
+  const bounds = { x: 520, y: 360, z: 340 };
 
-  for (let iteration = 0; iteration < 110; iteration += 1) {
+  const iterationCount = nodes.length > 750 ? 54 : 78;
+
+  for (let iteration = 0; iteration < iterationCount; iteration += 1) {
     for (const velocity of velocities) {
       velocity.x = 0;
       velocity.y = 0;
+      velocity.z = 0;
     }
 
     for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
@@ -253,23 +361,25 @@ function relaxLayout(
         const right = nodes[rightIndex];
         let dx = right.x - left.x;
         let dy = right.y - left.y;
-        let distSq = dx * dx + dy * dy;
+        let dz = right.z - left.z;
+        let distSq = dx * dx + dy * dy + dz * dz;
         if (distSq < 1) distSq = 1;
         const distance = Math.sqrt(distSq);
         dx /= distance;
         dy /= distance;
+        dz /= distance;
 
         const sameCluster = left.cluster === right.cluster;
-        const minDistance = sameCluster ? 16 : 11;
-        let repulsion = sameCluster ? 1600 / distSq : 820 / distSq;
-        if (distance < minDistance) {
-          repulsion += (minDistance - distance) * 0.75;
-        }
+        const minDistance = sameCluster ? 19 : 13;
+        let repulsion = sameCluster ? 2100 / distSq : 980 / distSq;
+        if (distance < minDistance) repulsion += (minDistance - distance) * 0.92;
 
         velocities[leftIndex].x -= dx * repulsion;
         velocities[leftIndex].y -= dy * repulsion;
+        velocities[leftIndex].z -= dz * repulsion;
         velocities[rightIndex].x += dx * repulsion;
         velocities[rightIndex].y += dy * repulsion;
+        velocities[rightIndex].z += dz * repulsion;
       }
     }
 
@@ -281,41 +391,45 @@ function relaxLayout(
       const target = nodes[targetIndex];
       let dx = target.x - source.x;
       let dy = target.y - source.y;
-      let distance = Math.sqrt(dx * dx + dy * dy);
+      let dz = target.z - source.z;
+      let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (distance < 1) distance = 1;
       dx /= distance;
       dy /= distance;
-      const targetDistance = 18 + (1 - edge.weight) * 92;
-      const spring = (distance - targetDistance) * 0.024;
+      dz /= distance;
+      const targetDistance = 26 + (1 - edge.weight) * 101;
+      const spring = (distance - targetDistance) * 0.018;
 
       velocities[sourceIndex].x += dx * spring;
       velocities[sourceIndex].y += dy * spring;
+      velocities[sourceIndex].z += dz * spring;
       velocities[targetIndex].x -= dx * spring;
       velocities[targetIndex].y -= dy * spring;
+      velocities[targetIndex].z -= dz * spring;
     }
 
     nodes.forEach((node, index) => {
       const clusterCenter = clusterCenters[node.cluster % clusterCenters.length];
-      const clusterPull = 0.0039 / Math.max(1, Math.sqrt(node.clusterSize));
-      const centerPull = 0.00135;
+      const clusterPull = 0.0058 / Math.max(1, Math.sqrt(node.clusterSize));
+      const centerPull = 0.00042;
       velocities[index].x += (clusterCenter.x - node.x) * clusterPull;
       velocities[index].y += (clusterCenter.y - node.y) * clusterPull;
+      velocities[index].z += (clusterCenter.z - node.z) * clusterPull;
       velocities[index].x += -node.x * centerPull;
       velocities[index].y += -node.y * centerPull;
+      velocities[index].z += -node.z * centerPull * 0.55;
 
-      node.x += velocities[index].x * 0.9;
-      node.y += velocities[index].y * 0.9;
+      node.x += velocities[index].x * 0.82;
+      node.y += velocities[index].y * 0.82;
+      node.z += velocities[index].z * 0.82;
 
-      const radius = Math.sqrt(node.x * node.x + node.y * node.y);
-      if (radius > maxRadius) {
-        const scale = maxRadius / radius;
-        node.x *= scale;
-        node.y *= scale;
-      }
+      node.x = clamp(node.x, -bounds.x, bounds.x);
+      node.y = clamp(node.y, -bounds.y, bounds.y);
+      node.z = clamp(node.z, -bounds.z, bounds.z);
     });
   }
 
-  for (let pass = 0; pass < 18; pass += 1) {
+  for (let pass = 0; pass < 14; pass += 1) {
     for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
       const left = nodes[leftIndex];
       for (let rightIndex = leftIndex + 1; rightIndex < nodes.length; rightIndex += 1) {
@@ -323,22 +437,25 @@ function relaxLayout(
         if (left.cluster !== right.cluster) continue;
         let dx = right.x - left.x;
         let dy = right.y - left.y;
-        let distance = Math.sqrt(dx * dx + dy * dy);
+        let dz = right.z - left.z;
+        let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (distance < 1) distance = 1;
-        const minDistance = 16 + Math.min(6, Math.sqrt(left.clusterSize) * 0.16);
+        const minDistance = 18 + Math.min(7, Math.sqrt(left.clusterSize) * 0.18);
         if (distance >= minDistance) continue;
         dx /= distance;
         dy /= distance;
-        const push = (minDistance - distance) * 0.18;
+        dz /= distance;
+        const push = (minDistance - distance) * 0.22;
         left.x -= dx * push;
         left.y -= dy * push;
+        left.z -= dz * push;
         right.x += dx * push;
         right.y += dy * push;
+        right.z += dz * push;
       }
     }
   }
 
-  // Light semantic smoothing from each node's strongest neighbors.
   for (const node of nodes) {
     const neighborsByWeight = [...(weights.get(node.id)?.entries() ?? [])]
       .sort((left, right) => right[1] - left[1])
@@ -347,6 +464,7 @@ function relaxLayout(
 
     let avgX = 0;
     let avgY = 0;
+    let avgZ = 0;
     let total = 0;
     for (const [neighborId, weight] of neighborsByWeight) {
       const neighbor = nodes[nodeIndex.get(neighborId) ?? -1];
@@ -354,134 +472,228 @@ function relaxLayout(
       const influence = clamp(weight, 0.24, 0.92);
       avgX += neighbor.x * influence;
       avgY += neighbor.y * influence;
+      avgZ += neighbor.z * influence;
       total += influence;
     }
     if (total > 0) {
-      node.x = node.x * 0.91 + (avgX / total) * 0.09;
-      node.y = node.y * 0.91 + (avgY / total) * 0.09;
+      node.x = node.x * 0.917 + (avgX / total) * 0.083;
+      node.y = node.y * 0.917 + (avgY / total) * 0.083;
+      node.z = node.z * 0.917 + (avgZ / total) * 0.083;
     }
   }
 }
 
-function normalizeToCircle(nodes: LayoutNode[]) {
-  let maxRadius = 1;
-  let maxDegree = 1;
+function normalizeToVolume(nodes: LayoutNode[]) {
+  if (nodes.length === 0) return;
+
+  const bounds = nodes.reduce(
+    (acc, node) => ({
+      minX: Math.min(acc.minX, node.x),
+      maxX: Math.max(acc.maxX, node.x),
+      minY: Math.min(acc.minY, node.y),
+      maxY: Math.max(acc.maxY, node.y),
+      minZ: Math.min(acc.minZ, node.z),
+      maxZ: Math.max(acc.maxZ, node.z),
+    }),
+    {
+      minX: Infinity,
+      maxX: -Infinity,
+      minY: Infinity,
+      maxY: -Infinity,
+      minZ: Infinity,
+      maxZ: -Infinity,
+    },
+  );
+
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+  const scaleX = 292 / Math.max(1, (bounds.maxX - bounds.minX) / 2);
+  const scaleY = 218 / Math.max(1, (bounds.maxY - bounds.minY) / 2);
+  const scaleZ = 206 / Math.max(1, (bounds.maxZ - bounds.minZ) / 2);
+
   for (const node of nodes) {
-    maxRadius = Math.max(maxRadius, Math.sqrt(node.x * node.x + node.y * node.y));
-    maxDegree = Math.max(maxDegree, node.degree);
-  }
-  const scale = (GRAPH_RADIUS * 0.99) / maxRadius;
-  for (const node of nodes) {
-    node.x *= scale;
-    node.y *= scale;
-    const radius = Math.sqrt(node.x * node.x + node.y * node.y);
-    const radialT = clamp(radius / (GRAPH_RADIUS * 0.99), 0, 1);
-    const degreeBias = clamp(node.degree / maxDegree, 0, 1);
-    const shellCurve = Math.pow(radialT, 1.08);
-    const inwardBias = 1 - degreeBias * 0.18;
-    const targetRadius = GRAPH_RADIUS * 0.99 * shellCurve * inwardBias;
-    if (radius > 0) {
-      const radialScale = targetRadius / radius;
-      node.x *= radialScale;
-      node.y *= radialScale;
-    }
+    node.x = (node.x - centerX) * scaleX;
+    node.y = (node.y - centerY) * scaleY - 24;
+    node.z = (node.z - centerZ) * scaleZ;
   }
 }
 
-function paintScene(
-  context: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  layout: Layout,
-  now: number,
-  hoveredId: string | null,
-  frameNodesRef: { current: FrameNode[] },
-) {
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
-  if (canvas.width !== WIDTH * dpr || canvas.height !== HEIGHT * dpr) {
-    canvas.width = WIDTH * dpr;
-    canvas.height = HEIGHT * dpr;
-    context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
+function createSceneObjects(layout: Layout) {
+  const nodeGeometry = new THREE.SphereGeometry(1, 12, 8);
+  const hitGeometry = new THREE.SphereGeometry(1, 8, 6);
+  const nodeMaterial = new THREE.ShaderMaterial({
+    transparent: true,
+    toneMapped: false,
+    vertexShader: `
+      varying vec3 vColor;
 
-  context.clearRect(0, 0, WIDTH, HEIGHT);
-  drawBackdrop(context);
+      void main() {
+        vColor = instanceColor;
+        vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
 
-  const frameNodes = frameProject(layout.nodes, now);
-  frameNodesRef.current = frameNodes;
-  const nodeById = new Map(frameNodes.map((node) => [node.id, node]));
-  const activeIds = hoveredId ? new Set([hoveredId, ...(layout.neighbors.get(hoveredId) ?? [])]) : null;
-  const labels = hoveredId
-    ? frameNodes.filter((node) => node.id === hoveredId)
-    : [...frameNodes]
-        .sort((left, right) => right.degree + right.clusterSize * 0.03 - (left.degree + left.clusterSize * 0.03))
-        .slice(0, LABEL_COUNT);
-
-  for (const edge of layout.edges) {
-    const source = nodeById.get(edge.source);
-    const target = nodeById.get(edge.target);
-    if (!source || !target) continue;
-    const active = !activeIds || (activeIds.has(source.id) && activeIds.has(target.id));
-    context.beginPath();
-    context.moveTo(source.drawX, source.drawY);
-    context.lineTo(target.drawX, target.drawY);
-    context.strokeStyle = active
-      ? `rgba(96, 83, 70, ${0.06 + edge.weight * 0.16})`
-      : `rgba(130, 118, 106, ${0.012 + edge.weight * 0.045})`;
-    context.lineWidth = 0.35 + edge.weight * 1.45;
-    context.stroke();
-  }
-
-  for (const node of frameNodes) {
-    const active = !activeIds || activeIds.has(node.id);
-    const showHalo = hoveredId === node.id || node.degree >= 10;
-    if (showHalo) {
-      context.fillStyle = withAlpha(node.color, active ? 0.14 : 0.05);
-      context.beginPath();
-      context.arc(node.drawX, node.drawY, node.glowRadius, 0, Math.PI * 2);
-      context.fill();
-    }
-
-    context.fillStyle = withAlpha(node.color, active ? 0.9 : 0.48);
-    context.beginPath();
-    context.arc(node.drawX, node.drawY, node.radius, 0, Math.PI * 2);
-    context.fill();
-
-    context.strokeStyle = hoveredId === node.id ? "rgba(28,24,21,0.9)" : "rgba(255,255,255,0.94)";
-    context.lineWidth = hoveredId === node.id ? 1.55 : 0.9;
-    context.stroke();
-  }
-
-  context.font = "12px var(--font-inter), system-ui, sans-serif";
-  context.fillStyle = "rgba(28,24,21,0.68)";
-  for (const node of labels) {
-    context.globalAlpha = 0.92;
-    context.fillText(truncate(node.title, 26), node.drawX + 12, node.drawY - 10);
-  }
-  context.globalAlpha = 1;
-}
-
-function frameProject(nodes: LayoutNode[], now: number): FrameNode[] {
-  const rotation = now * 0.00012;
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-
-  return nodes.map((node) => {
-    const driftX = Math.sin(now * 0.00036 + node.phase) * node.drift;
-    const driftY = Math.cos(now * 0.00032 + node.phase * 1.17) * node.drift;
-    const rotatedX = node.x * cos - node.y * sin;
-    const rotatedY = node.x * sin + node.y * cos;
-    const x = CENTER_X + rotatedX + driftX;
-    const y = CENTER_Y + rotatedY + driftY;
-    const radius = 2.5 + Math.min(node.degree, 10) * 0.11 + (node.score ?? 0) * 0.03;
-
-    return {
-      ...node,
-      drawX: x,
-      drawY: y,
-      radius,
-      glowRadius: radius * 2.4,
-    };
+      void main() {
+        gl_FragColor = vec4(vColor, 0.88);
+      }
+    `,
   });
+  const hitMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    colorWrite: false,
+    depthWrite: false,
+    transparent: true,
+    opacity: 0,
+  });
+  const nodesMesh = new THREE.InstancedMesh(nodeGeometry, nodeMaterial, layout.nodes.length);
+  const hitMesh = new THREE.InstancedMesh(hitGeometry, hitMaterial, layout.nodes.length);
+  nodesMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  hitMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  nodesMesh.frustumCulled = false;
+  hitMesh.frustumCulled = false;
+
+  const dummy = new THREE.Object3D();
+  const baseColors: THREE.Color[] = [];
+  const hoverColors: THREE.Color[] = [];
+
+  layout.nodes.forEach((node, index) => {
+    setNodeMatrix(nodesMesh, dummy, node, node.radius);
+    setNodeMatrix(hitMesh, dummy, node, node.radius * 3.25);
+    const baseColor = new THREE.Color(node.color).lerp(new THREE.Color("#fff8ef"), 0.09);
+    const hoverColor = new THREE.Color(node.color).lerp(new THREE.Color("#fff8ef"), 0.25);
+    baseColors.push(baseColor);
+    hoverColors.push(hoverColor);
+    nodesMesh.setColorAt(index, baseColor);
+  });
+  nodesMesh.instanceMatrix.needsUpdate = true;
+  hitMesh.instanceMatrix.needsUpdate = true;
+  if (nodesMesh.instanceColor) {
+    nodesMesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+    nodesMesh.instanceColor.needsUpdate = true;
+  }
+  nodesMesh.computeBoundingSphere();
+  hitMesh.computeBoundingSphere();
+
+  const edgePositions = new Float32Array(layout.edges.length * 6);
+  layout.edges.forEach((edge, index) => {
+    const source = layout.nodeById.get(edge.source);
+    const target = layout.nodeById.get(edge.target);
+    if (!source || !target) return;
+    writeEdgePosition(edgePositions, index, source, target);
+  });
+  const edgeGeometry = new THREE.BufferGeometry();
+  edgeGeometry.setAttribute("position", new THREE.BufferAttribute(edgePositions, 3));
+  const edgeMaterial = new THREE.LineBasicMaterial({
+    color: 0x6c6256,
+    transparent: true,
+    opacity: 0.14,
+    depthWrite: false,
+  });
+  const edgeLines = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+  edgeLines.frustumCulled = false;
+
+  const activeLinePositions = new Float32Array(layout.maxIncidentEdges * 6);
+  const activeGeometry = new THREE.BufferGeometry();
+  activeGeometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(activeLinePositions, 3).setUsage(THREE.DynamicDrawUsage),
+  );
+  activeGeometry.setDrawRange(0, 0);
+  const activeMaterial = new THREE.LineBasicMaterial({
+    color: 0x1c1815,
+    transparent: true,
+    opacity: 0.56,
+    depthWrite: false,
+  });
+  const activeLines = new THREE.LineSegments(activeGeometry, activeMaterial);
+  activeLines.frustumCulled = false;
+  activeLines.renderOrder = 2;
+
+  return {
+    nodesMesh,
+    hitMesh,
+    edgeLines,
+    activeLines,
+    activeLinePositions,
+    baseColors,
+    hoverColors,
+  };
+}
+
+function applyHover(
+  state: GraphSceneState,
+  nextId: string | null,
+  hoveredIdRef: React.MutableRefObject<string | null>,
+  setHoveredNode: (node: LayoutNode | null) => void,
+) {
+  if (state.hoveredId === nextId || state.destroyed) return;
+
+  const previousIndex =
+    state.hoveredId == null ? undefined : state.layout.nodeIndex.get(state.hoveredId);
+  const nextIndex = nextId == null ? undefined : state.layout.nodeIndex.get(nextId);
+
+  if (previousIndex != null) updateNodeInstance(state, previousIndex, false);
+  if (nextIndex != null) updateNodeInstance(state, nextIndex, true);
+
+  state.hoveredId = nextId;
+  hoveredIdRef.current = nextId;
+  updateActiveEdges(state, nextId);
+  setHoveredNode(nextId ? (state.layout.nodeById.get(nextId) ?? null) : null);
+}
+
+function updateNodeInstance(state: GraphSceneState, index: number, hovered: boolean) {
+  const node = state.layout.nodes[index];
+  if (!node) return;
+  setNodeMatrix(state.nodesMesh, state.dummy, node, hovered ? node.radius * 1.95 : node.radius);
+  state.nodesMesh.setColorAt(index, hovered ? state.hoverColors[index] : state.baseColors[index]);
+  state.nodesMesh.instanceMatrix.needsUpdate = true;
+  if (state.nodesMesh.instanceColor) state.nodesMesh.instanceColor.needsUpdate = true;
+}
+
+function updateActiveEdges(state: GraphSceneState, hoveredId: string | null) {
+  const edgeIndexes = hoveredId ? (state.layout.incidentEdges.get(hoveredId) ?? []) : [];
+  edgeIndexes.forEach((edgeIndex, drawIndex) => {
+    const edge = state.layout.edges[edgeIndex];
+    const source = state.layout.nodeById.get(edge.source);
+    const target = state.layout.nodeById.get(edge.target);
+    if (!source || !target) return;
+    writeEdgePosition(state.activeLinePositions, drawIndex, source, target);
+  });
+
+  const position = state.activeLines.geometry.getAttribute("position");
+  position.needsUpdate = true;
+  state.activeLines.geometry.setDrawRange(0, edgeIndexes.length * 2);
+}
+
+function setNodeMatrix(
+  mesh: THREE.InstancedMesh,
+  dummy: THREE.Object3D,
+  node: LayoutNode,
+  radius: number,
+) {
+  dummy.position.set(node.x, node.y, node.z);
+  dummy.scale.setScalar(radius);
+  dummy.updateMatrix();
+  mesh.setMatrixAt(node.index, dummy.matrix);
+}
+
+function writeEdgePosition(
+  positions: Float32Array,
+  edgeIndex: number,
+  source: LayoutNode,
+  target: LayoutNode,
+) {
+  const offset = edgeIndex * 6;
+  positions[offset] = source.x;
+  positions[offset + 1] = source.y;
+  positions[offset + 2] = source.z;
+  positions[offset + 3] = target.x;
+  positions[offset + 4] = target.y;
+  positions[offset + 5] = target.z;
 }
 
 function pickAnchors(
@@ -532,58 +744,32 @@ function assignClusters(
   return assignments;
 }
 
-function buildClusterCenters(count: number): Vec2[] {
-  const radius = GRAPH_RADIUS * 0.44;
-  return Array.from({ length: count }, (_, index) => {
-    const angle = (-Math.PI / 2) + (index / Math.max(count, 1)) * Math.PI * 2;
-    const ring = index % 2 === 0 ? 1 : 0.83;
-    return {
-      x: Math.cos(angle) * radius * ring,
-      y: Math.sin(angle) * radius * ring,
-    };
-  });
+function buildClusterCenters(count: number): Vec3[] {
+  const baseCenters: Vec3[] = [
+    { x: -230, y: -92, z: -42 },
+    { x: -78, y: 104, z: 86 },
+    { x: 126, y: -58, z: -18 },
+    { x: 268, y: 88, z: 72 },
+    { x: -286, y: 80, z: 28 },
+    { x: 48, y: -158, z: 116 },
+    { x: 230, y: -150, z: -112 },
+    { x: -6, y: 4, z: -146 },
+  ];
+
+  return Array.from({ length: count }, (_, index) => baseCenters[index % baseCenters.length]);
 }
 
-function drawBackdrop(context: CanvasRenderingContext2D) {
-  const gradient = context.createRadialGradient(CENTER_X, CENTER_Y, 30, CENTER_X, CENTER_Y, GRAPH_RADIUS * 1.34);
-  gradient.addColorStop(0, "rgba(255,255,255,0.36)");
-  gradient.addColorStop(0.58, "rgba(245,231,224,0.22)");
-  gradient.addColorStop(1, "rgba(245,231,224,0)");
-  context.fillStyle = gradient;
-  context.beginPath();
-  context.arc(CENTER_X, CENTER_Y, GRAPH_RADIUS * 1.28, 0, Math.PI * 2);
-  context.fill();
-}
-
-function findHoveredNode(point: { x: number; y: number }, nodes: FrameNode[]) {
-  let best: FrameNode | null = null;
-  let bestDistance = Infinity;
-
-  for (const node of nodes) {
-    const dx = point.x - node.drawX;
-    const dy = point.y - node.drawY;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    const hitRadius = Math.max(node.radius + 4, 7);
-    if (distance <= hitRadius && distance < bestDistance) {
-      best = node;
-      bestDistance = distance;
-    }
+function disposeMaterial(material: THREE.Material | THREE.Material[]) {
+  if (Array.isArray(material)) {
+    for (const entry of material) entry.dispose();
+  } else {
+    material.dispose();
   }
-
-  return best;
-}
-
-function canvasPoint(event: React.PointerEvent<HTMLCanvasElement>) {
-  const rect = event.currentTarget.getBoundingClientRect();
-  return {
-    x: ((event.clientX - rect.left) / rect.width) * WIDTH,
-    y: ((event.clientY - rect.top) / rect.height) * HEIGHT,
-  };
 }
 
 function hashString(value: string): number {
   let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
+  for (let index = 0; index < value.length; index++) {
     hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
   }
   return hash;
@@ -591,17 +777,4 @@ function hashString(value: string): number {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-function withAlpha(hex: string, alpha: number) {
-  const normalized = hex.replace("#", "");
-  const r = Number.parseInt(normalized.slice(0, 2), 16);
-  const g = Number.parseInt(normalized.slice(2, 4), 16);
-  const b = Number.parseInt(normalized.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-function truncate(value: string, max: number) {
-  if (value.length <= max) return value;
-  return `${value.slice(0, max - 3)}...`;
 }

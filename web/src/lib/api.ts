@@ -310,9 +310,10 @@ export async function fetchLandingGraph(init?: RequestInit): Promise<LandingGrap
     const res = await fetch(
       `${API_BASE_URL}/landing/graph`,
       withReadTimeout({
-        cache: "no-store",
+        cache: "force-cache",
+        next: { revalidate: 600 },
         ...init,
-      }),
+      }, 10000),
     );
     if (!res.ok) return null;
     return LandingGraphSchema.parse(await res.json());
