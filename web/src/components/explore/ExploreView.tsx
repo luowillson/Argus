@@ -165,25 +165,12 @@ function EmptyHint() {
 }
 
 function PathwayResult({ pathway }: { pathway: ExplorePathwayDTO }) {
-  const orderingSource = String(
-    pathway.enrichment_notes?.["ordering_source"] ?? "llm",
-  );
   return (
     <div>
       <header className="border-b border-rule pb-5">
         <h2 className="font-serif text-[22px] leading-snug text-ink">
           {pathway.title}
         </h2>
-        {pathway.rationale ? (
-          <p className="mt-3 whitespace-pre-line text-[14px] text-prose-soft">
-            {pathway.rationale}
-          </p>
-        ) : null}
-        <p className="mt-3 font-sans text-[11px] uppercase tracking-wide text-muted">
-          {pathway.items.length} papers ·{" "}
-          {String(pathway.enrichment_notes?.["topic_count"] ?? "?")} sub-topics ·{" "}
-          ordering: {orderingSource}
-        </p>
       </header>
 
       <ol className="mt-6 space-y-6">
