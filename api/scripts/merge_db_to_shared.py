@@ -8,6 +8,7 @@ overlapping papers/reviews/scores update instead of failing on primary keys.
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -47,7 +48,6 @@ TABLES: tuple[TableSpec, ...] = (
             "created_at",
         ),
         conflict_columns=("id",),
-        jsonb_columns=frozenset({"content"}),
     ),
     TableSpec(
         name="reviews",
@@ -63,6 +63,7 @@ TABLES: tuple[TableSpec, ...] = (
             "created_at",
         ),
         conflict_columns=("id",),
+        jsonb_columns=frozenset({"content"}),
     ),
     TableSpec(
         name="ai_insights",
@@ -190,7 +191,12 @@ def batched(rows: Sequence[dict[str, Any]], size: int) -> Iterable[Sequence[dict
 
 
 def read_rows(source: Connection, spec: TableSpec) -> list[dict[str, Any]]:
-    return [dict(row) for row in source.execute(text(select_sql(spec))).mappings().all()]
+    rows = [dict(row) for row in source.execute(text(select_sql(spec))).mappings().all()]
+    for row in rows:
+        for column in spec.jsonb_columns:
+            if row[column] is not None and not isinstance(row[column], str):
+                row[column] = json.dumps(row[column])
+    return rows
 
 
 def merge_table(
