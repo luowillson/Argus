@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import cast
+from typing import Literal, cast
 
 from sqlalchemy import text as sa_text
 from sqlmodel import Session, select
@@ -26,6 +26,14 @@ _CANDIDATE_POOL = 50  # max IDs per channel before re-ranking by score
 _FUZZY_WORD_SIM_THRESHOLD = 0.16
 _MIN_TOKEN_LEN = 3
 _MAX_TOKENS = 5
+SortKey = Literal["score", "novelty", "technical", "clarity", "impact"]
+_SORT_KEYS: set[str] = {"score", "novelty", "technical", "clarity", "impact"}
+_DIMENSION_SORT_SQL = {
+    "novelty": "novelty",
+    "technical": "technical",
+    "clarity": "clarity",
+    "impact": "impact",
+}
 
 
 def _escape_ilike(s: str) -> str:
@@ -133,14 +141,33 @@ def _has_embeddings(db: Session) -> bool:
     return bool(row and row[0])
 
 
-def _browse_candidate_ids(db: Session, limit: int, offset: int) -> list[str]:
-    """Return browse-page IDs ranked globally by Veros score."""
+def _browse_candidate_ids(
+    db: Session,
+    limit: int,
+    offset: int,
+    sort_by: SortKey,
+) -> list[str]:
+    """Return browse-page IDs ranked globally by score or a standardized dimension."""
+    if sort_by == "score":
+        order_expr = "s.score"
+    else:
+        dimension = _DIMENSION_SORT_SQL[sort_by]
+        order_expr = (
+            "COALESCE("
+            f"(s.breakdown->'standardized_dimensions'->> '{dimension}')::float, "
+            f"i.{dimension}, "
+            "0"
+            ")"
+        )
+
     sql = sa_text(
-        """
+        f"""
         SELECT p.id
         FROM papers p
         LEFT JOIN veros_scores s ON s.paper_id = p.id
+        LEFT JOIN ai_insights i ON i.paper_id = p.id
         ORDER BY
+          {order_expr} DESC NULLS LAST,
           s.score DESC NULLS LAST,
           p.ingested_at DESC NULLS LAST,
           p.created_at DESC
@@ -191,13 +218,16 @@ def search_papers(
     query: str,
     limit: int = 20,
     offset: int = 0,
+    sort_by: SortKey = "score",
 ) -> list[PaperOut]:
     q = query.strip()
+    if sort_by not in _SORT_KEYS:
+        sort_by = "score"
     candidate_ids: list[str] = []
     candidate_ids_are_page = False
 
     if not q:
-        candidate_ids = _browse_candidate_ids(db, limit, offset)
+        candidate_ids = _browse_candidate_ids(db, limit, offset, sort_by)
         candidate_ids_are_page = True
     else:
         candidate_ids.extend(_fuzzy_text_candidate_ids(db, q))
@@ -252,7 +282,13 @@ def search_papers(
         for pid in unique_ids
         if pid in papers
     ]
-    results.sort(key=lambda x: (x.score or 0.0), reverse=True)
+    results.sort(
+        key=lambda x: (
+            getattr(x, sort_by) if getattr(x, sort_by) is not None else 0.0,
+            x.score or 0.0,
+        ),
+        reverse=True,
+    )
 
     if candidate_ids_are_page:
         return results
