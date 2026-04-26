@@ -28,3 +28,30 @@ class LearningPathwayOut(BaseModel):
 class TopicPathwayRequest(BaseModel):
     topic: str
     limit: int = 8
+
+
+class LocalExploreCandidate(BaseModel):
+    paper_id: str
+    title: str
+    stage: str
+    year: int | None = None
+    veros_score: float | None = None
+    tldr: str | None = None
+    anchor_concepts: list[str] = []
+
+
+class LocalExploreOrderRequest(BaseModel):
+    topic: str
+    candidates: list[LocalExploreCandidate]
+
+
+class LocalExploreOrderedItem(BaseModel):
+    paper_id: str
+    learning_step: int
+    why_now: str
+
+
+class LocalExploreOrderResponse(BaseModel):
+    rationale: str
+    items: list[LocalExploreOrderedItem]
+    model: str | None = None

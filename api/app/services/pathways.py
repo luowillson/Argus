@@ -1131,6 +1131,20 @@ Hard rules:
 - Output ONLY JSON.
 """
 
+_LOCAL_ORDER_SYSTEM_PROMPT = """You are Veros Explore, a pedagogical sequencer.
+
+The app has already searched a local JSON paper corpus and selected candidate
+papers. Your only job is to order these papers so a reader learns the topic as
+smoothly as possible, from foundations to frontier.
+
+Hard rules:
+- Only use paper_id values from the input.
+- Keep at least 6 papers unless fewer were provided.
+- learning_step values must be 1..N and contiguous, no duplicates.
+- why_now: one short sentence on why this paper comes at this point.
+- Output ONLY JSON.
+"""
+
 
 @dataclass(frozen=True)
 class _TopicBucket:
@@ -1148,6 +1162,68 @@ class _OrderedItem(BaseModel):
 class _OrderedPlanOut(BaseModel):
     rationale: str = Field(default="", max_length=800)
     items: list[_OrderedItem] = Field(min_length=1, max_length=32)
+
+
+def _local_order_prompt(topic: str, candidates: list[dict[str, Any]]) -> str:
+    payload = {
+        "seed_label": topic,
+        "papers": candidates[:16],
+    }
+    return "\n".join(
+        [
+            f"Learning goal: {topic}",
+            "Order the candidate papers below for optimal learning.",
+            "Return JSON: { rationale, items: [{ paper_id, learning_step, why_now }] }.",
+            "Use only the paper_id values from the input.",
+            json.dumps(payload, indent=2),
+        ]
+    )
+
+
+def order_local_explore_candidates(
+    *,
+    topic: str,
+    candidates: list[dict[str, Any]],
+) -> tuple[_OrderedPlanOut, str | None]:
+    query = topic.strip()
+    valid_ids = {
+        str(candidate.get("paper_id"))
+        for candidate in candidates
+        if str(candidate.get("paper_id") or "").strip()
+    }
+    if not query:
+        raise ValueError("topic must not be empty")
+    if not valid_ids:
+        raise ValueError("no candidate papers to order")
+
+    provider = make_llm_provider()
+    response = provider.complete_json(
+        system=_LOCAL_ORDER_SYSTEM_PROMPT,
+        user=_local_order_prompt(query, candidates),
+        max_output_tokens=1200,
+        temperature=0.15,
+    )
+    model = response.model
+    parsed_json = _parse_stage_plan_json(response.text)
+    parsed = _OrderedPlanOut.model_validate(parsed_json)
+    seen_ids: set[str] = set()
+    cleaned: list[_OrderedItem] = []
+    for item in parsed.items:
+        if item.paper_id not in valid_ids or item.paper_id in seen_ids:
+            continue
+        seen_ids.add(item.paper_id)
+        cleaned.append(item)
+
+    min_items = min(_EXPLORE_MIN_PAPERS, len(valid_ids))
+    if len(cleaned) < min_items:
+        raise ValueError(f"LLM returned too few valid items ({len(cleaned)})")
+
+    cleaned.sort(key=lambda item: item.learning_step)
+    contiguous = [
+        item.model_copy(update={"learning_step": position})
+        for position, item in enumerate(cleaned, start=1)
+    ]
+    return parsed.model_copy(update={"items": contiguous}), model
 
 
 def _bucket_quality(candidates: list[_Candidate], required_anchors: list[str]) -> str:

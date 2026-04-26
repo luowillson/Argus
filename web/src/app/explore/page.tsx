@@ -10,7 +10,7 @@ export default async function ExplorePage({
   const initialTopic = q.trim();
   return (
     <div className="min-h-screen bg-paper text-ink">
-      <TopNav variant="compact" />
+      <TopNav />
       <ExploreView initialTopic={initialTopic} />
     </div>
   );

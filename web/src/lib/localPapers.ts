@@ -2,11 +2,13 @@ import { z } from "zod";
 import {
   API_BASE_URL,
   type ExplorePathwayDTO,
+  type LocalExploreOrderCandidate,
   PaperDetailSchema,
   type PaperDetailDTO,
   type PaperOutDTO,
   type SearchPageDTO,
   type SearchSortKey,
+  postLocalExploreOrder,
   rememberPaper,
 } from "@/lib/api";
 import { adaptPaperDetail } from "@/lib/adapt";
@@ -318,6 +320,7 @@ function relevanceScore(paper: PaperDetailDTO, query: string): number {
 }
 
 function sortValue(paper: PaperDetailDTO, sort: SearchSortKey): number {
+  if (sort === "relevance") return 0;
   if (sort === "score") return paper.score ?? 0;
   return paper[sort] ?? 0;
 }
@@ -446,6 +449,64 @@ function rankExplorePapers(
     });
 }
 
+function candidateForGemini(item: ExplorePathwayDTO["items"][number]): LocalExploreOrderCandidate | null {
+  if (!item.paper) return null;
+  return {
+    paper_id: item.paper.id,
+    title: item.paper.title,
+    stage: item.stage,
+    year: null,
+    veros_score: item.paper.score,
+    tldr: item.paper.tldr,
+    anchor_concepts: item.anchor_concepts,
+  };
+}
+
+async function applyGeminiOrdering(
+  topic: string,
+  items: ExplorePathwayDTO["items"],
+): Promise<{ items: ExplorePathwayDTO["items"]; rationale: string; model: string | null } | null> {
+  const candidates = items
+    .map(candidateForGemini)
+    .filter((candidate): candidate is LocalExploreOrderCandidate => candidate !== null);
+  if (candidates.length === 0) return null;
+
+  const ordered = await postLocalExploreOrder(topic, candidates);
+  const byId = new Map(
+    items
+      .filter((item) => item.paper !== null)
+      .map((item) => [item.paper?.id, item] as const),
+  );
+  const usedIds = new Set<string>();
+  const nextItems: ExplorePathwayDTO["items"] = [];
+
+  for (const orderedItem of ordered.items) {
+    const item = byId.get(orderedItem.paper_id);
+    if (!item || usedIds.has(orderedItem.paper_id)) continue;
+    usedIds.add(orderedItem.paper_id);
+    nextItems.push({
+      ...item,
+      position: nextItems.length + 1,
+      read_focus: orderedItem.why_now,
+    });
+  }
+
+  for (const item of items) {
+    const paperId = item.paper?.id;
+    if (paperId && usedIds.has(paperId)) continue;
+    nextItems.push({
+      ...item,
+      position: nextItems.length + 1,
+    });
+  }
+
+  return {
+    items: nextItems,
+    rationale: ordered.rationale,
+    model: ordered.model,
+  };
+}
+
 export async function buildLocalExplorePath(topic: string): Promise<ExplorePathwayDTO> {
   const query = topic.trim();
   if (!query) {
@@ -519,24 +580,45 @@ export async function buildLocalExplorePath(topic: string): Promise<ExplorePathw
     item.position = index + 1;
   });
 
-  const strongCount = items.filter((item) => item.match_quality === "strong").length;
+  let finalItems = items;
+  let orderingSource = "local_json";
+  let orderingRationale = "";
+  let orderingModel: string | null = null;
+  try {
+    const ordered = await applyGeminiOrdering(query, items);
+    if (ordered !== null) {
+      finalItems = ordered.items;
+      orderingRationale = ordered.rationale;
+      orderingModel = ordered.model;
+      orderingSource = "gemini";
+    }
+  } catch {
+    // Gemini ordering is best-effort; the local JSON ordering keeps Explore usable.
+  }
+
+  const strongCount = finalItems.filter((item) => item.match_quality === "strong").length;
+  const rationale = [
+    "Built from the local paper JSON corpus. Papers are matched by topic text, ranked by relevance plus Veros/dimension scores, and grouped from foundations to frontier.",
+    orderingRationale,
+  ].filter(Boolean).join("\n\n");
+
   return {
     id: `local-json:${encodeURIComponent(query)}:${Date.now()}`,
     title: `Learning pathway for ${query}`,
-    rationale:
-      "Built from the local paper JSON corpus. Papers are matched by topic text, ranked by relevance plus Veros/dimension scores, and grouped from foundations to frontier.",
+    rationale,
     status: "ready",
     enrichment_notes: {
-      ordering_source: "local_json",
+      ordering_source: orderingSource,
+      ordering_model: orderingModel,
       topic_count: stages.length,
-      paper_count: items.length,
+      paper_count: finalItems.length,
       strong_stage_count: strongCount,
-      weak_or_missing_stage_count: items.length - strongCount,
+      weak_or_missing_stage_count: finalItems.length - strongCount,
       needs_enrichment: false,
     },
     seed_paper_id: null,
     query_text: query,
-    items,
+    items: finalItems,
   };
 }
 

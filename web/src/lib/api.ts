@@ -498,6 +498,7 @@ export type ExplorePathwayDTO = z.infer<typeof ExplorePathwaySchema>;
 export type ExplorePathwayItemDTO = z.infer<typeof ExplorePathwayItemSchema>;
 
 const EXPLORE_TIMEOUT_MS = 60_000;
+const EXPLORE_ORDER_TIMEOUT_MS = 8_000;
 
 function timeoutSignal(ms: number): AbortSignal | undefined {
   if (typeof AbortSignal.timeout === "function") {
@@ -558,4 +559,54 @@ export async function postExplorePath(
     throw new Error(detail);
   }
   return ExplorePathwaySchema.parse(await res.json());
+}
+
+export type LocalExploreOrderCandidate = {
+  paper_id: string;
+  title: string;
+  stage: string;
+  year: number | null;
+  veros_score: number | null;
+  tldr: string | null;
+  anchor_concepts: string[];
+};
+
+const LocalExploreOrderSchema = z.object({
+  rationale: z.string(),
+  model: z.string().nullable(),
+  items: z.array(
+    z.object({
+      paper_id: z.string(),
+      learning_step: z.number(),
+      why_now: z.string(),
+    }),
+  ),
+});
+
+export type LocalExploreOrderDTO = z.infer<typeof LocalExploreOrderSchema>;
+
+export async function postLocalExploreOrder(
+  topic: string,
+  candidates: LocalExploreOrderCandidate[],
+): Promise<LocalExploreOrderDTO> {
+  const res = await fetch(`${API_BASE_URL}/pathways/explore/order`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic, candidates }),
+    cache: "no-store",
+    signal: timeoutSignal(EXPLORE_ORDER_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    let detail = `Explore ordering API error ${res.status}`;
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string" && body.detail.trim()) {
+        detail = body.detail;
+      }
+    } catch {
+      // Ignore non-JSON error bodies.
+    }
+    throw new Error(detail);
+  }
+  return LocalExploreOrderSchema.parse(await res.json());
 }
