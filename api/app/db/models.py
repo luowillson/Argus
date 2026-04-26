@@ -113,3 +113,99 @@ class PaperEmbedding(SQLModel, table=True):
     embedding: list[float] = Field(sa_column=Column(Vector(384), nullable=False))
     source: str
     model: str
+
+
+class PaperConcept(SQLModel, table=True):
+    __tablename__ = "paper_concepts"
+
+    paper_id: str = Field(
+        sa_column=Column(
+            String, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+        ),
+    )
+    concept: str = Field(primary_key=True)
+    weight: float = Field(sa_column=Column(Numeric(4, 3), nullable=False))
+    source: str
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class PaperEdge(SQLModel, table=True):
+    __tablename__ = "paper_edges"
+
+    src_paper_id: str = Field(
+        sa_column=Column(
+            String, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+        ),
+    )
+    dst_paper_id: str = Field(
+        sa_column=Column(
+            String, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+        ),
+    )
+    edge_type: str = Field(primary_key=True)
+    weight: float = Field(sa_column=Column(Numeric(4, 3), nullable=False))
+    edge_metadata: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class LearningPathway(SQLModel, table=True):
+    __tablename__ = "learning_pathways"
+
+    id: str = Field(primary_key=True)
+    user_id: str | None = None
+    seed_paper_id: str | None = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("papers.id", ondelete="SET NULL"), nullable=True),
+    )
+    query_text: str | None = None
+    title: str
+    rationale: str
+    status: str = Field(default="ready")
+    model: str | None = None
+    enrichment_notes: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    generated_at: datetime = Field(
+        default_factory=lambda: datetime.now(),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class LearningPathwayItem(SQLModel, table=True):
+    __tablename__ = "learning_pathway_items"
+
+    pathway_id: str = Field(
+        sa_column=Column(
+            String,
+            ForeignKey("learning_pathways.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+    )
+    position: int = Field(primary_key=True)
+    paper_id: str | None = Field(
+        default=None,
+        sa_column=Column(
+            String, ForeignKey("papers.id", ondelete="CASCADE"), nullable=True
+        ),
+    )
+    stage: str
+    why_this_paper: str
+    read_focus: str
+    match_quality: str = Field(default="strong")
+    search_query: str | None = None
+    anchor_concepts: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    score: float | None = Field(default=None, sa_column=Column(Numeric(4, 3)))
