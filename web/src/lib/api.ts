@@ -511,3 +511,142 @@ export async function unsavePaper(paperId: string): Promise<void> {
   });
   if (!res.ok) throw new Error(`Unsave failed ${res.status}`);
 }
+
+const ExplorePathwayItemSchema = z.object({
+  position: z.number(),
+  stage: z.string(),
+  why_this_paper: z.string(),
+  read_focus: z.string(),
+  match_quality: z.string(),
+  search_query: z.string().nullable(),
+  anchor_concepts: z.array(z.string()),
+  paper: PaperOutSchema.nullable(),
+});
+
+export const ExplorePathwaySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  rationale: z.string(),
+  status: z.string(),
+  enrichment_notes: z.record(z.string(), z.unknown()),
+  seed_paper_id: z.string().nullable(),
+  query_text: z.string().nullable(),
+  items: z.array(ExplorePathwayItemSchema),
+});
+
+export type ExplorePathwayDTO = z.infer<typeof ExplorePathwaySchema>;
+export type ExplorePathwayItemDTO = z.infer<typeof ExplorePathwayItemSchema>;
+
+const EXPLORE_TIMEOUT_MS = 60_000;
+const EXPLORE_ORDER_TIMEOUT_MS = 8_000;
+
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  if (typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(ms);
+  }
+  if (typeof AbortController === "undefined") return undefined;
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
+function combineAbortSignals(signals: (AbortSignal | undefined)[]): AbortSignal | undefined {
+  const present = signals.filter((item): item is AbortSignal => item !== undefined);
+  if (present.length === 0) return undefined;
+  if (present.length === 1) return present[0];
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(present);
+  }
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  for (const item of present) {
+    if (item.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+    item.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
+}
+
+export async function postExplorePath(
+  topic: string,
+  force = false,
+  signal?: AbortSignal,
+): Promise<ExplorePathwayDTO> {
+  const params = new URLSearchParams();
+  if (force) params.set("force", "true");
+  const url = `${API_BASE_URL}/pathways/explore${params.toString() ? `?${params}` : ""}`;
+  const init: RequestInit = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic, limit: 8 }),
+    cache: "no-store",
+  };
+  init.signal = combineAbortSignals([signal, timeoutSignal(EXPLORE_TIMEOUT_MS)]);
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    let detail = `Explore API error ${res.status}`;
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string" && body.detail.trim()) {
+        detail = body.detail;
+      }
+    } catch {
+      // Ignore non-JSON error bodies.
+    }
+    throw new Error(detail);
+  }
+  return ExplorePathwaySchema.parse(await res.json());
+}
+
+export type LocalExploreOrderCandidate = {
+  paper_id: string;
+  title: string;
+  stage: string;
+  year: number | null;
+  veros_score: number | null;
+  tldr: string | null;
+  anchor_concepts: string[];
+};
+
+const LocalExploreOrderSchema = z.object({
+  rationale: z.string(),
+  model: z.string().nullable(),
+  items: z.array(
+    z.object({
+      paper_id: z.string(),
+      learning_step: z.number(),
+      why_now: z.string(),
+    }),
+  ),
+});
+
+export type LocalExploreOrderDTO = z.infer<typeof LocalExploreOrderSchema>;
+
+export async function postLocalExploreOrder(
+  topic: string,
+  candidates: LocalExploreOrderCandidate[],
+): Promise<LocalExploreOrderDTO> {
+  const res = await fetch(`${API_BASE_URL}/pathways/explore/order`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic, candidates }),
+    cache: "no-store",
+    signal: timeoutSignal(EXPLORE_ORDER_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    let detail = `Explore ordering API error ${res.status}`;
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string" && body.detail.trim()) {
+        detail = body.detail;
+      }
+    } catch {
+      // Ignore non-JSON error bodies.
+    }
+    throw new Error(detail);
+  }
+  return LocalExploreOrderSchema.parse(await res.json());
+}

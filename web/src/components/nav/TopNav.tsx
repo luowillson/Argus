@@ -37,6 +37,12 @@ export function TopNav({ variant = "landing", children, className }: Props) {
               Ranking
             </Link>
             <Link
+              href="/explore"
+              className="cursor-pointer border-l border-cream/25 pl-7"
+            >
+              Explore
+            </Link>
+            <Link
               href="/saved"
               className="cursor-pointer border-l border-cream/25 pl-7"
             >

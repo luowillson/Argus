@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session
@@ -134,3 +135,106 @@ def embed_paper_task(self, paper_id: str) -> None:  # type: ignore[override]
         db.commit()
 
     logger.info("embed_paper_task: done paper=%r", paper_id)
+
+
+@celery_app.task(
+    name="veros.enrich_learning_pathway",
+    bind=True,
+    max_retries=1,
+    default_retry_delay=120,
+)
+def enrich_learning_pathway_task(self, pathway_id: str) -> dict[str, object]:  # type: ignore[override]
+    from app.db.models import LearningPathway
+    from app.services.ingest import ingest_paper
+    from app.services.pathways import (
+        find_openreview_candidates_for_stage,
+        generate_pathway_from_paper,
+        generate_pathway_from_topic,
+        get_stage_items_for_enrichment,
+    )
+
+    engine = get_engine()
+    discovered: list[str] = []
+    ingested: list[str] = []
+    with Session(engine) as db:
+        pathway = db.get(LearningPathway, pathway_id)
+        if pathway is None:
+            logger.warning("enrich_learning_pathway_task: pathway %s not found", pathway_id)
+            return {"pathway_id": pathway_id, "status": "missing"}
+
+        pathway.status = "enriching"
+        db.add(pathway)
+        db.commit()
+
+        stage_items = [
+            item
+            for item in get_stage_items_for_enrichment(db, pathway_id)
+            if item.match_quality in {"weak", "missing"}
+        ]
+        existing_ids = {
+            item.paper_id for item in get_stage_items_for_enrichment(db, pathway_id) if item.paper_id
+        }
+
+        for item in stage_items:
+            candidates = find_openreview_candidates_for_stage(
+                stage=SimpleNamespace(
+                    stage=item.stage,
+                    purpose=item.why_this_paper,
+                    search_query=item.search_query or item.stage,
+                    anchor_concepts=list(item.anchor_concepts or []),
+                ),
+                seed_label=pathway.query_text or pathway.title,
+                exclude_ids=existing_ids.union(discovered),
+                limit=3,
+            )
+            for forum_id in candidates:
+                discovered.append(forum_id)
+                try:
+                    ingest_paper(db, forum_id)
+                    ingested.append(forum_id)
+                    existing_ids.add(forum_id)
+                except Exception:
+                    logger.exception(
+                        "enrich_learning_pathway_task: ingest failed for discovered forum %s",
+                        forum_id,
+                    )
+                    continue
+
+        pathway = db.get(LearningPathway, pathway_id)
+        assert pathway is not None
+        pathway.status = "enriched"
+        notes = dict(pathway.enrichment_notes or {})
+        notes.update(
+            {
+                "discovered_forum_ids": discovered,
+                "ingested_forum_ids": ingested,
+            }
+        )
+        pathway.enrichment_notes = notes
+        db.add(pathway)
+        db.commit()
+
+        if pathway.seed_paper_id:
+            refreshed = generate_pathway_from_paper(
+                db,
+                paper_id=pathway.seed_paper_id,
+                user_id=pathway.user_id,
+                force=True,
+                enqueue_enrichment=False,
+            )
+        else:
+            refreshed = generate_pathway_from_topic(
+                db,
+                topic=pathway.query_text or "",
+                user_id=pathway.user_id,
+                force=True,
+                enqueue_enrichment=False,
+            )
+
+    return {
+        "pathway_id": pathway_id,
+        "status": "completed",
+        "discovered_count": len(discovered),
+        "ingested_count": len(ingested),
+        "refreshed_pathway_id": refreshed.id,
+    }

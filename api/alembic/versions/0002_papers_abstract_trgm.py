@@ -1,12 +1,12 @@
 """GIN trgm index on paper abstract (coalesced) for fuzzy search.
 
-Revision ID: 0002
+Revision ID: 0002_papers_abstract_trgm
 Revises: 0001
 """
 
 from alembic import op
 
-revision = "0002"
+revision = "0002_papers_abstract_trgm"
 down_revision = "0001"
 branch_labels = None
 depends_on = None
