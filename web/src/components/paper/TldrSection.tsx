@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { analyzePaper, fetchPaper } from "@/lib/api";
+import { LatexText } from "@/components/ui/LatexText";
 
 type Props = {
   paperId: string;
@@ -93,7 +94,7 @@ export function TldrSection({
         )}
       </div>
       <p className="mt-2 max-w-[820px] font-serif text-[19px] leading-[1.6]">
-        {summary}
+        <LatexText>{summary}</LatexText>
       </p>
       {status === "error" && error && (
         <p className="mt-3 max-w-[820px] font-sans text-[12px] leading-[1.6] text-muted">

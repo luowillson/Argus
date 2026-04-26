@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Newsreader, Inter, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
+import "katex/dist/katex.min.css";
 
 const newsreader = Newsreader({
   variable: "--font-newsreader",
