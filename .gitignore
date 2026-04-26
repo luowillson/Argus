@@ -20,6 +20,8 @@ paper_scores.json
 .env
 .env.*
 la-hacks-26/
+!.env.example
+!*.env.example
 
 # Editor and OS files
 .DS_Store
