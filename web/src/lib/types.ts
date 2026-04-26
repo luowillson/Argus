@@ -23,10 +23,10 @@ export interface Paper {
   score: number | null;
   grade: string;
   verdict: Verdict;
-  novelty: number;
-  technical: number;
-  clarity: number;
-  impact: number;
+  novelty: number | null;
+  technical: number | null;
+  clarity: number | null;
+  impact: number | null;
   consensus: string;
   consensusStrength: "strong" | "moderate" | "mixed" | "split";
   deep: string[];

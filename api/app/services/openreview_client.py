@@ -181,18 +181,23 @@ def _build_paper(note: Any) -> FetchedPaper:
     )
 
 
-def fetch_paper_and_reviews(
+def _is_not_found(exc: Exception) -> bool:
+    """Detect a NotFoundError from openreview-py without importing internal modules."""
+    msg = str(exc)
+    return (
+        "NotFoundError" in msg
+        or "'status': 404" in msg
+        or '"status": 404' in msg
+    )
+
+
+def _fetch_paper_and_reviews_at(
     forum_id: str,
     *,
-    api_version: str = "v2",
-    username: str | None = None,
-    password: str | None = None,
+    api_version: str,
+    username: str | None,
+    password: str | None,
 ) -> tuple[FetchedPaper, list[FetchedReview]]:
-    """Return (paper, reviews) for the given forum id.
-
-    Caller should consider an empty review list a soft failure (auth-gated venue
-    or paper not yet reviewed) — not an exception.
-    """
     client = build_client(api_version, username, password)
     paper_note = client.get_note(id=forum_id)
     forum_notes = client.get_notes(forum=forum_id)
@@ -216,3 +221,36 @@ def fetch_paper_and_reviews(
     ]
     reviews.sort(key=lambda r: r.created or datetime.min.replace(tzinfo=UTC))
     return paper, reviews
+
+
+def fetch_paper_and_reviews(
+    forum_id: str,
+    *,
+    api_version: str = "v2",
+    username: str | None = None,
+    password: str | None = None,
+) -> tuple[FetchedPaper, list[FetchedReview]]:
+    """Return (paper, reviews) for the given forum id.
+
+    Tries the v2 API first (covers ~all venues from 2023+). Older venues live on
+    v1 only — if v2 returns NotFound, fall back to v1 before giving up.
+
+    Caller should consider an empty review list a soft failure (auth-gated venue
+    or paper not yet reviewed) — not an exception.
+    """
+    try:
+        return _fetch_paper_and_reviews_at(
+            forum_id,
+            api_version=api_version,
+            username=username,
+            password=password,
+        )
+    except Exception as exc:
+        if api_version == "v2" and _is_not_found(exc):
+            return _fetch_paper_and_reviews_at(
+                forum_id,
+                api_version="v1",
+                username=username,
+                password=password,
+            )
+        raise

@@ -20,22 +20,45 @@ logger = logging.getLogger(__name__)
 def ingest_paper_task(self, forum_id: str) -> dict:  # type: ignore[override]
     # Late import avoids circular import (celery_app ← tasks ← services ← celery_app).
     from app.services.ingest import ingest_paper  # noqa: PLC0415
+    from app.services.ingest_failures import (  # noqa: PLC0415
+        clear_ingest_failure,
+        get_ingest_failure,
+        mark_ingest_failed,
+    )
 
     engine = get_engine()
     with Session(engine) as db:
+        if get_ingest_failure(db, forum_id) is not None:
+            logger.info(
+                "ingest_paper_task: forum %r previously failed, skipping",
+                forum_id,
+            )
+            return {"paper_id": forum_id, "status": "failed"}
+
         try:
             result = ingest_paper(db, forum_id)
         except Exception as exc:
             exc_str = str(exc)
+            attempts = self.request.retries + 1
             # OpenReview 404 / NotFoundError is permanent — don't retry.
             if "NotFoundError" in exc_str or '"status": 404' in exc_str:
+                mark_ingest_failed(db, forum_id, attempts=attempts, error=exc_str)
                 logger.error(
                     "ingest_paper_task: forum %r not found on OpenReview, abandoning",
                     forum_id,
                 )
                 raise  # fail the task without scheduling retries
+            if self.request.retries >= self.max_retries:
+                mark_ingest_failed(db, forum_id, attempts=attempts, error=exc_str)
+                logger.exception(
+                    "ingest_paper_task exhausted retries for %s after %d attempts",
+                    forum_id,
+                    attempts,
+                )
+                raise
             logger.exception("ingest_paper_task failed for %s", forum_id)
             raise self.retry(exc=exc) from exc
+        clear_ingest_failure(db, forum_id)
 
     # Chain embedding step after successful ingest (best-effort; failures don't block).
     embed_paper_task.delay(forum_id)

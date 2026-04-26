@@ -1,5 +1,4 @@
-import { SearchHeaderBar } from "@/components/nav/SearchHeaderBar";
-import { ResultsGrid } from "@/components/search/ResultsGrid";
+import { SearchView } from "@/components/search/SearchView";
 import { fetchSearch } from "@/lib/api";
 import { adaptPaperOut } from "@/lib/adapt";
 import { VEROS_PAPERS } from "@/lib/mock-papers";
@@ -8,16 +7,27 @@ import type { Paper } from "@/lib/types";
 export default async function SearchPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    focus?: string;
+    notFound?: string;
+    pending?: string;
+  }>;
 }) {
-  const { q = "" } = await searchParams;
+  const {
+    q = "",
+    focus,
+    notFound,
+    pending,
+  } = await searchParams;
   const query = q.trim();
+  const mode = focus ? "specific" : "topic";
 
   let results: Paper[] = [];
   let fromApi = false;
 
   try {
-    const dtos = await fetchSearch(query);
+    const dtos = await fetchSearch(query, 20, 0, mode);
     if (dtos.length > 0) {
       results = dtos.map(adaptPaperOut);
       fromApi = true;
@@ -37,30 +47,12 @@ export default async function SearchPage({
   }
 
   return (
-    <div className="min-h-screen bg-paper">
-      <SearchHeaderBar initialQuery={query} />
-
-      <div className="px-16 pt-9 pb-1.5">
-        <h1 className="text-[26px] font-medium tracking-[-0.011em]">
-          {query ? (
-            <>
-              Results for{" "}
-              <em className="font-serif italic text-burgundy">
-                &ldquo;{query}&rdquo;
-              </em>
-            </>
-          ) : (
-            <>All papers</>
-          )}
-        </h1>
-        <div className="mt-1.5 font-sans text-[13px] text-muted">
-          {results.length.toLocaleString()} papers · sorted by Veros score
-        </div>
-      </div>
-
-      <div className="px-16 pb-16">
-        <ResultsGrid papers={results} />
-      </div>
-    </div>
+    <SearchView
+      initialQuery={query}
+      initialResults={results}
+      initialFocusId={focus}
+      initialNotFound={notFound === "1"}
+      initialPendingTitle={pending}
+    />
   );
 }

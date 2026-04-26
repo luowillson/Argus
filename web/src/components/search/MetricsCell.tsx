@@ -1,12 +1,12 @@
 type Props = {
-  novelty: number;
-  technical: number;
-  clarity: number;
-  impact: number;
+  novelty: number | null;
+  technical: number | null;
+  clarity: number | null;
+  impact: number | null;
 };
 
 export function MetricsCell({ novelty, technical, clarity, impact }: Props) {
-  const items: [string, number][] = [
+  const items: [string, number | null][] = [
     ["nov", novelty],
     ["tech", technical],
     ["clar", clarity],
@@ -20,8 +20,14 @@ export function MetricsCell({ novelty, technical, clarity, impact }: Props) {
             {label}
           </dt>
           <dd className="tabular-nums text-[15px] font-medium text-ink">
-            {v}
-            <span className="ml-0.5 text-[11px] text-muted">/100</span>
+            {v === null ? (
+              <span className="text-muted/50">—</span>
+            ) : (
+              <>
+                {v}
+                <span className="ml-0.5 text-[11px] text-muted">/100</span>
+              </>
+            )}
           </dd>
         </div>
       ))}
