@@ -1,7 +1,10 @@
+"use client";
+
 import Link from "next/link";
 import type { Paper } from "@/lib/types";
 import { cn, scoreColor } from "@/lib/utils";
 import { MetricsCell } from "./MetricsCell";
+import { LatexText } from "@/components/ui/LatexText";
 
 type Props = {
   paper: Paper;
@@ -43,13 +46,13 @@ export function ResultRow({ paper, isFirst }: Props) {
       {/* Paper */}
       <div className="pointer-events-none relative z-10">
         <div className="text-[18px] font-medium leading-snug text-burgundy">
-          {paper.title}
+          <LatexText>{paper.title ?? ""}</LatexText>
         </div>
         <div className="mt-1 font-sans text-[12px] text-muted-2">
           {paper.authors}
         </div>
         <div className="mt-2 max-w-[680px] font-serif text-[13px] italic leading-[1.55] text-prose">
-          {paper.tldr}
+          <LatexText>{paper.tldr ?? ""}</LatexText>
         </div>
         <div className="mt-2 font-mono text-[11px] text-muted">
           <a
