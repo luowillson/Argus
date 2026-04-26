@@ -138,11 +138,18 @@ Useful root commands:
 make infra-up
 make redis-up
 make db-migrate
+make db-merge-to-shared
 make db-current
 make api-dev
 make worker
 make web-dev
 ```
+
+`api/scripts/merge_db_to_shared.py` merges an existing local Docker database
+into the configured shared `DATABASE_URL` with table-ordered upserts. It defaults
+to `postgresql+psycopg://veros:veros@localhost:5432/veros` as the source and can
+rewrite `saved_papers.user_id` for teammates who previously saved papers as
+`demo-user`.
 
 ```
 papers
