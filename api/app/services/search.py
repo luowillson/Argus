@@ -13,7 +13,7 @@ import logging
 import re
 from typing import cast
 
-from sqlalchemy import text as sa_text
+from sqlalchemy import func, text as sa_text
 from sqlmodel import Session, select
 
 from app.db.models import AIInsight, Paper, VerosScore
@@ -168,6 +168,33 @@ def build_paper_out(
     )
 
 
+def count_papers(db: Session, query: str) -> int:
+    """Return total result count for the given query (used for pagination)."""
+    q = query.strip()
+    if not q:
+        return db.exec(select(func.count(Paper.id))).one()  # type: ignore[return-value]
+
+    # Collect all candidates (no slice) and return unique count.
+    candidate_ids: list[str] = list(_fuzzy_text_candidate_ids(db, q))
+    try:
+        if _has_embeddings(db):
+            from app.services.embeddings.factory import get_embedding_provider
+
+            provider = get_embedding_provider()
+            embedding = provider.encode([q])[0]
+            vec_str = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
+            sql = sa_text(
+                "SELECT paper_id FROM paper_embeddings "
+                "ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :n"
+            )
+            rows = db.execute(sql, {"vec": vec_str, "n": _CANDIDATE_POOL}).fetchall()
+            candidate_ids.extend(r[0] for r in rows)
+    except Exception:
+        pass
+
+    return len(set(candidate_ids))
+
+
 def search_papers(
     db: Session,
     query: str,
@@ -178,8 +205,9 @@ def search_papers(
     candidate_ids: list[str] = []
 
     if not q:
+        # Empty query: browse all papers with proper DB-level pagination.
         rows = db.exec(
-            select(Paper.id).order_by(Paper.ingested_at.desc()).limit(_CANDIDATE_POOL)  # type: ignore[attr-defined]
+            select(Paper.id).order_by(Paper.ingested_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         ).all()
         candidate_ids = list(rows)
     else:
@@ -237,4 +265,8 @@ def search_papers(
     ]
     results.sort(key=lambda x: (x.score or 0.0), reverse=True)
 
+    # Empty-query browse: DB already applied OFFSET/LIMIT, so return as-is.
+    # Non-empty query: candidates were collected in bulk; slice here for the page.
+    if not q:
+        return results
     return results[offset : offset + limit]

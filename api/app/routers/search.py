@@ -2,9 +2,18 @@ from fastapi import APIRouter, Query
 
 from app.deps import DbSession
 from app.schemas.paper import PaperOut
-from app.services.search import search_papers
+from app.services.search import count_papers, search_papers
 
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+@router.get("/count")
+def search_count(
+    db: DbSession,
+    q: str = Query(default="", description="Search query"),
+) -> dict[str, int]:
+    """Return total result count for a query — used by the frontend for pagination."""
+    return {"total": count_papers(db, q)}
 
 
 @router.get("", response_model=list[PaperOut])

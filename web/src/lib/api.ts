@@ -148,6 +148,14 @@ export async function fetchSearch(
   return z.array(PaperOutSchema).parse(await res.json());
 }
 
+export async function fetchSearchCount(query: string): Promise<number> {
+  const params = new URLSearchParams({ q: query });
+  const res = await fetch(`${API_BASE_URL}/search/count?${params}`, { cache: "no-store" });
+  if (!res.ok) return 0;
+  const data = z.object({ total: z.number() }).parse(await res.json());
+  return data.total;
+}
+
 export async function fetchSaved(init?: RequestInit): Promise<PaperOutDTO[]> {
   const res = await fetch(`${API_BASE_URL}/saved`, { cache: "no-store", ...init });
   if (!res.ok) throw new Error(`Saved API error ${res.status}`);
