@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     db_pool_timeout: int = 10
     redis_url: str = "redis://localhost:6379/0"
 
-    llm_provider: str = "zai"  # "zai" | "gemini"
+    llm_provider: str = "gemini"  # "zai" | "gemini"
 
     zai_api_key: str = ""
     zai_base_url: str = "https://api.z.ai/api/paas/v4/"
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3-flash-preview"
 
     openreview_username: str = ""
     openreview_password: str = ""

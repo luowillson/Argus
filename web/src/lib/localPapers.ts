@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   API_BASE_URL,
+  type ExplorePathwayDTO,
   PaperDetailSchema,
   type PaperDetailDTO,
   type PaperOutDTO,
@@ -348,6 +349,193 @@ export async function searchLocalPapers(
   return {
     results: ranked.slice(offset, offset + limit).map(({ paper }) => paperDetailToOut(paper)),
     total: ranked.length,
+  };
+}
+
+type ExploreStage = {
+  name: string;
+  purpose: string;
+  terms: string[];
+};
+
+type RankedExplorePaper = {
+  paper: PaperDetailDTO;
+  relevance: number;
+  quality: number;
+};
+
+const EXPLORE_STAGE_COUNT = 4;
+const EXPLORE_PER_STAGE = 3;
+const EXPLORE_MAX_ITEMS = 10;
+
+function dimensionAverage(paper: PaperDetailDTO): number {
+  const values = [paper.novelty, paper.technical, paper.clarity, paper.impact]
+    .filter((value): value is number => typeof value === "number");
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function paperQualityScore(paper: PaperDetailDTO): number {
+  return (paper.score ?? 0) * 10 + dimensionAverage(paper);
+}
+
+function exploreStages(query: string): ExploreStage[] {
+  return [
+    {
+      name: "Foundations",
+      purpose: `Start with accessible papers that establish the background for ${query}.`,
+      terms: ["foundation", "survey", "introduction", "benchmark", "representation"],
+    },
+    {
+      name: "Core methods",
+      purpose: `Move into the main technical methods and architectures behind ${query}.`,
+      terms: ["method", "architecture", "training", "algorithm", "model"],
+    },
+    {
+      name: "Evaluation and analysis",
+      purpose: `Read work that tests, compares, or interprets how ${query} behaves in practice.`,
+      terms: ["evaluation", "analysis", "benchmark", "ablation", "interpretability"],
+    },
+    {
+      name: "Frontier and applications",
+      purpose: `Finish with higher-scoring recent papers that connect ${query} to active research directions.`,
+      terms: ["application", "scaling", "efficient", "frontier", "state of the art"],
+    },
+  ];
+}
+
+function stageQuery(query: string, stage: ExploreStage): string {
+  return `${query} ${stage.terms.join(" ")}`;
+}
+
+function readFocusForPaper(
+  paper: PaperDetailDTO,
+  stage: ExploreStage,
+  query: string,
+): string {
+  if (paper.deep.length > 0) {
+    return `Read ${paper.deep[0]} to connect this paper to ${query}.`;
+  }
+  if (paper.tldr) {
+    return paper.tldr;
+  }
+  return stage.purpose;
+}
+
+function rankExplorePapers(
+  papers: PaperDetailDTO[],
+  query: string,
+): RankedExplorePaper[] {
+  return papers
+    .map((paper) => {
+      const relevance = relevanceScore(paper, query);
+      return {
+        paper,
+        relevance,
+        quality: paperQualityScore(paper),
+      };
+    })
+    .filter(({ relevance }) => relevance > 0)
+    .sort((left, right) => {
+      return (
+        right.relevance - left.relevance ||
+        right.quality - left.quality ||
+        (right.paper.score ?? 0) - (left.paper.score ?? 0)
+      );
+    });
+}
+
+export async function buildLocalExplorePath(topic: string): Promise<ExplorePathwayDTO> {
+  const query = topic.trim();
+  if (!query) {
+    throw new Error("Enter a topic to explore.");
+  }
+
+  const papers = await loadLocalPaperCorpus();
+  const ranked = rankExplorePapers(papers, query);
+  if (ranked.length === 0) {
+    throw new Error(`No local papers matched "${query}". Try a broader topic.`);
+  }
+
+  const stages = exploreStages(query);
+  const usedIds = new Set<string>();
+  const items: ExplorePathwayDTO["items"] = [];
+
+  for (const stage of stages) {
+    const rankedForStage = ranked
+      .map(({ paper, relevance, quality }) => ({
+        paper,
+        relevance,
+        quality,
+        stageRelevance: relevanceScore(paper, stageQuery(query, stage)),
+      }))
+      .filter(({ paper, stageRelevance }) => !usedIds.has(paper.id) && stageRelevance > 0)
+      .sort((left, right) => {
+        return (
+          right.stageRelevance - left.stageRelevance ||
+          right.quality - left.quality ||
+          right.relevance - left.relevance
+        );
+      });
+
+    for (const candidate of rankedForStage.slice(0, EXPLORE_PER_STAGE)) {
+      usedIds.add(candidate.paper.id);
+      items.push({
+        position: items.length + 1,
+        stage: stage.name,
+        why_this_paper: stage.purpose,
+        read_focus: readFocusForPaper(candidate.paper, stage, query),
+        match_quality: candidate.relevance >= 18 ? "strong" : "weak",
+        search_query: stageQuery(query, stage),
+        anchor_concepts: tokens(query).slice(0, 6),
+        paper: paperDetailToOut(candidate.paper),
+      });
+      if (items.length >= EXPLORE_MAX_ITEMS) break;
+    }
+    if (items.length >= EXPLORE_MAX_ITEMS) break;
+  }
+
+  if (items.length < EXPLORE_STAGE_COUNT) {
+    for (const candidate of ranked) {
+      if (usedIds.has(candidate.paper.id)) continue;
+      const stage = stages[Math.min(items.length, stages.length - 1)];
+      usedIds.add(candidate.paper.id);
+      items.push({
+        position: items.length + 1,
+        stage: stage.name,
+        why_this_paper: stage.purpose,
+        read_focus: readFocusForPaper(candidate.paper, stage, query),
+        match_quality: candidate.relevance >= 18 ? "strong" : "weak",
+        search_query: query,
+        anchor_concepts: tokens(query).slice(0, 6),
+        paper: paperDetailToOut(candidate.paper),
+      });
+      if (items.length >= Math.min(EXPLORE_MAX_ITEMS, ranked.length)) break;
+    }
+  }
+
+  items.forEach((item, index) => {
+    item.position = index + 1;
+  });
+
+  const strongCount = items.filter((item) => item.match_quality === "strong").length;
+  return {
+    id: `local-json:${encodeURIComponent(query)}:${Date.now()}`,
+    title: `Learning pathway for ${query}`,
+    rationale:
+      "Built from the local paper JSON corpus. Papers are matched by topic text, ranked by relevance plus Veros/dimension scores, and grouped from foundations to frontier.",
+    status: "ready",
+    enrichment_notes: {
+      ordering_source: "local_json",
+      topic_count: stages.length,
+      paper_count: items.length,
+      strong_stage_count: strongCount,
+      weak_or_missing_stage_count: items.length - strongCount,
+      needs_enrichment: false,
+    },
+    seed_paper_id: null,
+    query_text: query,
+    items,
   };
 }
 

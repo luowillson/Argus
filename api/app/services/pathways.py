@@ -134,7 +134,10 @@ Hard rules:
 
 
 class _StageSpec(BaseModel):
-    stage: str = Field(min_length=3, max_length=50)
+    # Some Gemini models return numeric stage indices instead of labels; coerce.
+    model_config = {"coerce_numbers_to_str": True}
+
+    stage: str = Field(min_length=1, max_length=50)
     purpose: str = Field(min_length=12, max_length=220)
     search_query: str = Field(min_length=4, max_length=120)
     anchor_concepts: list[str] = Field(min_length=1, max_length=6)
@@ -384,8 +387,26 @@ def _stage_prompt(seed_label: str, seed_text: str, anchors: list[str]) -> str:
     )
 
 
+def _strip_reasoning_tags(text: str) -> str:
+    """Strip <thought>/<think>/<reasoning>/<scratchpad> blocks emitted by Gemma,
+    DeepSeek-R1, Qwen, etc. so the JSON extractor sees only the model's answer."""
+    for tag in ("thought", "think", "reasoning", "scratchpad"):
+        text = re.sub(
+            rf"<{tag}>.*?</{tag}>",
+            "",
+            text,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        # Some models leave an unterminated opening tag if they ran out of tokens
+        # mid-thought; drop everything up to the last closing tag we can find,
+        # otherwise drop the dangling open tag.
+        text = re.sub(rf"<{tag}>", "", text, flags=re.IGNORECASE)
+        text = re.sub(rf"</{tag}>", "", text, flags=re.IGNORECASE)
+    return text
+
+
 def _strip_code_fence(text: str) -> str:
-    cleaned = text.strip()
+    cleaned = _strip_reasoning_tags(text).strip()
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
         if lines and lines[0].startswith("```"):
@@ -1081,6 +1102,370 @@ def generate_pathway_from_topic(
         from app.workers.tasks import enrich_learning_pathway_task  # noqa: PLC0415
 
         enrich_learning_pathway_task.delay(pathway.id)
+    out = build_learning_pathway_out(db, pathway.id)
+    assert out is not None
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Explore: topic-driven, Veros-ranked, LLM-ordered learning sequence.
+# --------------------------------------------------------------------------- #
+
+_EXPLORE_PER_TOPIC = 3
+_EXPLORE_POOL_LIMIT = 10
+_EXPLORE_MIN_PAPERS = 6
+
+
+_ORDER_SYSTEM_PROMPT = """You are Veros Explore, a pedagogical sequencer.
+
+Given a learning goal and a set of candidate papers grouped by sub-topic, you
+output the optimal reading order so the reader builds understanding from
+foundations to frontier (e.g. for "mixture of experts": transformer basics →
+conditional computation → modern MoE architectures).
+
+Hard rules:
+- Keep at least 6 papers; you may drop redundant or off-topic ones.
+- Only use paper_id values that appear in the input.
+- learning_step values must be 1..N and contiguous, no duplicates.
+- why_now: one short sentence on why this paper comes at this point.
+- Output ONLY JSON.
+"""
+
+
+@dataclass(frozen=True)
+class _TopicBucket:
+    stage: _StageSpec
+    candidates: list[_Candidate]
+    match_quality: str  # strong | weak | missing
+
+
+class _OrderedItem(BaseModel):
+    paper_id: str = Field(min_length=1)
+    learning_step: int = Field(ge=1, le=64)
+    why_now: str = Field(min_length=4, max_length=400)
+
+
+class _OrderedPlanOut(BaseModel):
+    rationale: str = Field(default="", max_length=800)
+    items: list[_OrderedItem] = Field(min_length=1, max_length=32)
+
+
+def _bucket_quality(candidates: list[_Candidate], required_anchors: list[str]) -> str:
+    if not candidates:
+        return "missing"
+    best = candidates[0]
+    if best.pathway_score < _WEAK_STAGE_SCORE:
+        return "weak"
+    if best.anchor_overlap < 0.18 and _text_anchor_hits(required_anchors, best.paper, best.insight) < 2:
+        return "weak"
+    return "strong"
+
+
+def _pick_topic_buckets(
+    db: Session,
+    *,
+    stages: list[_StageSpec],
+    seed_label: str,  # noqa: ARG001 — kept for symmetry with _pick_stage_candidates
+    global_anchors: list[str],
+    reference_year: int | None,
+    per_topic: int = _EXPLORE_PER_TOPIC,
+) -> list[_TopicBucket]:
+    buckets: list[_TopicBucket] = []
+    used_ids: set[str] = set()
+
+    for stage in stages:
+        stage_anchors = _clean_anchor_list(stage.anchor_concepts)
+        required_anchors = _clean_anchor_list(global_anchors[:3] + stage_anchors, limit=6)
+        pool = _build_candidate_pool(
+            db,
+            query_text=stage.search_query,
+            reference_year=reference_year,
+            required_anchors=required_anchors,
+            exclude_paper_ids=used_ids,
+            limit=_EXPLORE_POOL_LIMIT,
+        )
+        # Within the embedding+anchor matched pool, rank by Veros score so the
+        # user's "rank by Veros score within the topic" requirement holds.
+        ranked = sorted(
+            pool,
+            key=lambda c: (
+                float(c.score_row.score) if c.score_row else 0.0,
+                c.pathway_score,
+                c.paper.year or 0,
+            ),
+            reverse=True,
+        )
+        picked: list[_Candidate] = []
+        for cand in ranked:
+            if cand.paper.id in used_ids:
+                continue
+            picked.append(cand)
+            used_ids.add(cand.paper.id)
+            if len(picked) >= per_topic:
+                break
+        buckets.append(
+            _TopicBucket(
+                stage=stage,
+                candidates=picked,
+                match_quality=_bucket_quality(picked, required_anchors),
+            )
+        )
+    return buckets
+
+
+def _order_payload(seed_label: str, buckets: list[_TopicBucket]) -> dict[str, Any]:
+    topics: list[dict[str, Any]] = []
+    papers: list[dict[str, Any]] = []
+    for bucket in buckets:
+        topics.append(
+            {
+                "stage": bucket.stage.stage,
+                "purpose": bucket.stage.purpose,
+                "anchor_concepts": list(bucket.stage.anchor_concepts),
+            }
+        )
+        for cand in bucket.candidates:
+            tldr = (
+                cand.insight.tldr
+                if cand.insight and cand.insight.tldr
+                else (cand.paper.abstract or "")
+            )[:320]
+            papers.append(
+                {
+                    "paper_id": cand.paper.id,
+                    "title": cand.paper.title,
+                    "year": cand.paper.year,
+                    "stage": bucket.stage.stage,
+                    "anchor_concepts": list(bucket.stage.anchor_concepts)[:4],
+                    "veros_score": float(cand.score_row.score) if cand.score_row else None,
+                    "tldr": tldr,
+                }
+            )
+    return {"seed_label": seed_label, "topics": topics, "papers": papers}
+
+
+def _order_prompt(seed_label: str, buckets: list[_TopicBucket]) -> str:
+    payload = _order_payload(seed_label, buckets)
+    return "\n".join(
+        [
+            f"Learning goal: {seed_label}",
+            "Order the candidate papers below for optimal learning.",
+            "Return JSON: { rationale, items: [{ paper_id, learning_step, why_now }] }.",
+            "Use only the paper_id values from the input. Keep at least 6 papers.",
+            json.dumps(payload, indent=2),
+        ]
+    )
+
+
+def _order_repair_prompt(raw_text: str) -> str:
+    return "\n".join(
+        [
+            "Repair the following into valid JSON only.",
+            "Return exactly one JSON object with keys: rationale, items.",
+            "Each item must have: paper_id, learning_step, why_now.",
+            "Do not include markdown fences or explanatory text.",
+            raw_text[:6000],
+        ]
+    )
+
+
+def _order_papers_for_learning(
+    seed_label: str,
+    buckets: list[_TopicBucket],
+) -> tuple[_OrderedPlanOut, str | None]:
+    valid_ids: set[str] = {
+        cand.paper.id for bucket in buckets for cand in bucket.candidates
+    }
+    if not valid_ids:
+        raise ValueError("no candidates to order")
+
+    provider = make_llm_provider()
+    response = provider.complete_json(
+        system=_ORDER_SYSTEM_PROMPT,
+        user=_order_prompt(seed_label, buckets),
+        max_output_tokens=4000,
+    )
+    model = response.model
+    try:
+        parsed_json = _parse_stage_plan_json(response.text)
+    except ValueError as exc:
+        logger.warning("explore ordering returned non-JSON; requesting repair: %s", exc)
+        repair = provider.complete_json(
+            system="You repair malformed model output into valid JSON.",
+            user=_order_repair_prompt(response.text),
+            max_output_tokens=4000,
+            temperature=0.0,
+        )
+        model = repair.model or model
+        parsed_json = _parse_stage_plan_json(repair.text)
+
+    parsed = _OrderedPlanOut.model_validate(parsed_json)
+
+    seen_ids: set[str] = set()
+    cleaned: list[_OrderedItem] = []
+    for item in parsed.items:
+        if item.paper_id not in valid_ids or item.paper_id in seen_ids:
+            continue
+        seen_ids.add(item.paper_id)
+        cleaned.append(item)
+
+    if len(cleaned) < _EXPLORE_MIN_PAPERS:
+        raise ValueError(f"LLM returned too few valid items ({len(cleaned)})")
+
+    cleaned.sort(key=lambda i: i.learning_step)
+    contiguous = [
+        item.model_copy(update={"learning_step": position})
+        for position, item in enumerate(cleaned, start=1)
+    ]
+    return parsed.model_copy(update={"items": contiguous}), model
+
+
+def _fallback_ordering(buckets: list[_TopicBucket]) -> _OrderedPlanOut:
+    """Stage-order, then Veros score within stage. Used when the LLM step fails."""
+    flat: list[tuple[int, _Candidate, _StageSpec]] = []
+    for stage_index, bucket in enumerate(buckets):
+        sorted_candidates = sorted(
+            bucket.candidates,
+            key=lambda c: (
+                float(c.score_row.score) if c.score_row else 0.0,
+                c.pathway_score,
+            ),
+            reverse=True,
+        )
+        for cand in sorted_candidates:
+            flat.append((stage_index, cand, bucket.stage))
+
+    items: list[_OrderedItem] = []
+    for position, (_, cand, stage) in enumerate(flat, start=1):
+        items.append(
+            _OrderedItem(
+                paper_id=cand.paper.id,
+                learning_step=position,
+                why_now=stage.purpose,
+            )
+        )
+    return _OrderedPlanOut(
+        rationale="Deterministic fallback ordering: stages from foundations to frontier, top Veros score within each stage.",
+        items=items,
+    )
+
+
+def _build_explore_items(
+    *,
+    ordered: _OrderedPlanOut,
+    buckets: list[_TopicBucket],
+) -> tuple[list[dict[str, Any]], dict[str, _Candidate]]:
+    candidate_by_id: dict[str, _Candidate] = {
+        cand.paper.id: cand for bucket in buckets for cand in bucket.candidates
+    }
+    bucket_by_paper_id: dict[str, _TopicBucket] = {
+        cand.paper.id: bucket for bucket in buckets for cand in bucket.candidates
+    }
+    items: list[dict[str, Any]] = []
+    for item in ordered.items:
+        cand = candidate_by_id.get(item.paper_id)
+        bucket = bucket_by_paper_id.get(item.paper_id)
+        if cand is None or bucket is None:
+            continue
+        items.append(
+            {
+                "paper_id": cand.paper.id,
+                "stage": bucket.stage.stage,
+                "why_this_paper": bucket.stage.purpose,
+                "read_focus": item.why_now,
+                "match_quality": bucket.match_quality,
+                "search_query": bucket.stage.search_query,
+                "anchor_concepts": list(bucket.stage.anchor_concepts),
+            }
+        )
+    return items, candidate_by_id
+
+
+def generate_explore_path(
+    db: Session,
+    *,
+    topic: str,
+    user_id: str | None,
+    per_topic: int = _EXPLORE_PER_TOPIC,
+    force: bool = False,
+) -> LearningPathwayOut:
+    query = topic.strip()
+    if not query:
+        raise ValueError("topic must not be empty")
+
+    cached = get_cached_pathway(db, seed_paper_id=None, query_text=query, user_id=user_id)
+    if cached is not None and not force:
+        out = build_learning_pathway_out(db, cached.id)
+        assert out is not None
+        return out
+
+    global_anchors = _anchor_terms(_concept_map(query))
+    model: str | None = None
+    try:
+        stage_plan, model = _infer_stage_plan(query, query, global_anchors)
+    except Exception:
+        logger.exception("explore stage planning fell back to deterministic stages for %s", query)
+        stage_plan = _fallback_stage_plan(query, global_anchors)
+
+    buckets = _pick_topic_buckets(
+        db,
+        stages=stage_plan.stages,
+        seed_label=query,
+        global_anchors=global_anchors,
+        reference_year=None,
+        per_topic=per_topic,
+    )
+    distinct_papers = {cand.paper.id for bucket in buckets for cand in bucket.candidates}
+    if len(distinct_papers) < _EXPLORE_MIN_PAPERS:
+        raise ValueError(
+            "local corpus is too sparse to build a learning sequence for this topic yet"
+        )
+
+    ordering_source = "llm"
+    try:
+        ordered, order_model = _order_papers_for_learning(query, buckets)
+        if order_model:
+            model = order_model
+    except Exception:
+        logger.exception("explore ordering fell back to deterministic ordering for %s", query)
+        ordered = _fallback_ordering(buckets)
+        ordering_source = "fallback"
+
+    items, candidate_lookup = _build_explore_items(ordered=ordered, buckets=buckets)
+    if len(items) < _EXPLORE_MIN_PAPERS:
+        # LLM dropped too many — fall back so the user always sees a usable sequence.
+        ordered = _fallback_ordering(buckets)
+        ordering_source = "fallback"
+        items, candidate_lookup = _build_explore_items(ordered=ordered, buckets=buckets)
+
+    title = stage_plan.title
+    rationale_parts = [stage_plan.rationale.strip(), ordered.rationale.strip()]
+    rationale = "\n\n".join(part for part in rationale_parts if part)
+
+    weak_or_missing = sum(1 for bucket in buckets if bucket.match_quality != "strong")
+    notes: dict[str, Any] = {
+        "topic_count": len(buckets),
+        "paper_count": len(items),
+        "ordering_source": ordering_source,
+        "strong_stage_count": len(buckets) - weak_or_missing,
+        "weak_or_missing_stage_count": weak_or_missing,
+        "needs_enrichment": False,
+    }
+
+    pathway = _persist_pathway(
+        db,
+        pathway_id=str(uuid4()),
+        user_id=user_id,
+        seed_paper_id=None,
+        query_text=query,
+        title=title,
+        rationale=rationale,
+        items=items,
+        model=model,
+        status="ready",
+        enrichment_notes=notes,
+        candidate_lookup=candidate_lookup,
+    )
     out = build_learning_pathway_out(db, pathway.id)
     assert out is not None
     return out

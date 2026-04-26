@@ -4,6 +4,7 @@ from app.deps import CurrentUserDep, DbSession
 from app.schemas.pathway import LearningPathwayOut, TopicPathwayRequest
 from app.services.pathways import (
     build_learning_pathway_out,
+    generate_explore_path,
     generate_pathway_from_paper,
     generate_pathway_from_topic,
 )
@@ -52,6 +53,24 @@ def create_pathway_from_topic(
             topic=req.topic,
             user_id=user.id,
             limit=req.limit,
+            force=force,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/explore", response_model=LearningPathwayOut)
+def create_explore_path(
+    req: TopicPathwayRequest,
+    db: DbSession,
+    user: CurrentUserDep,
+    force: bool = Query(default=False),
+) -> LearningPathwayOut:
+    try:
+        return generate_explore_path(
+            db,
+            topic=req.topic,
+            user_id=user.id,
             force=force,
         )
     except ValueError as exc:
