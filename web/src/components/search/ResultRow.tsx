@@ -3,15 +3,17 @@
 import Link from "next/link";
 import type { Paper } from "@/lib/types";
 import { cn, scoreColor } from "@/lib/utils";
+import { VIcon } from "@/components/brand/VIcon";
 import { MetricsCell } from "./MetricsCell";
 import { LatexText } from "@/components/ui/LatexText";
 
 type Props = {
   paper: Paper;
   isFirst?: boolean;
+  saved?: boolean;
 };
 
-export function ResultRow({ paper, isFirst }: Props) {
+export function ResultRow({ paper, isFirst, saved = false }: Props) {
   const dest = `/papers/${paper.id}`;
   const score = paper.score;
 
@@ -45,8 +47,16 @@ export function ResultRow({ paper, isFirst }: Props) {
 
       {/* Paper */}
       <div className="pointer-events-none relative z-10">
-        <div className="text-[18px] font-medium leading-snug text-burgundy">
-          <LatexText>{paper.title ?? ""}</LatexText>
+        <div className="flex items-start gap-2 text-[18px] font-medium leading-snug text-burgundy">
+          <span className="min-w-0">
+            <LatexText>{paper.title ?? ""}</LatexText>
+          </span>
+          {saved && (
+            <span className="mt-0.5 inline-flex shrink-0 items-center gap-1 border border-rule-soft bg-cream/45 px-1.5 py-0.5 font-sans text-[10px] font-medium leading-none text-burgundy/80">
+              <VIcon name="bookmark" size={10} className="fill-current stroke-current" />
+              Saved
+            </span>
+          )}
         </div>
         <div className="mt-1 font-sans text-[12px] text-muted-2">
           {paper.authors}

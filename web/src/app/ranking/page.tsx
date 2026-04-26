@@ -11,7 +11,7 @@ export default async function RankingPage({
   return (
     <div className="min-h-screen bg-paper text-ink">
       <TopNav />
-      <main className="mx-auto max-w-[1100px] px-16 py-10">
+      <main className="mx-auto max-w-[1100px] px-6 py-10 sm:px-10 lg:px-16">
         <AuthorRankingView
           initialRankings={[]}
           initialMode={query ? "search" : "best"}

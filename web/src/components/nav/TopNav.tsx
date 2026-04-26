@@ -12,12 +12,14 @@ export function TopNav({ variant = "landing", children, className }: Props) {
   return (
     <header
       className={cn(
-        "h-16 bg-burgundy text-cream font-sans text-[14px]",
-        variant === "landing" ? "px-12" : "px-8",
+        "bg-burgundy text-cream font-sans",
+        variant === "landing"
+          ? "h-14 px-3 text-[13px] sm:h-16 sm:px-8 sm:text-[14px] lg:px-12"
+          : "h-16 px-8 text-[14px]",
         className,
       )}
     >
-      <div className="flex h-full items-center gap-7">
+      <div className="flex h-full items-center gap-3 sm:gap-7">
         <Link
           href="/"
           className="flex cursor-pointer items-center gap-2.5 font-semibold tracking-[0.025em]"
@@ -29,7 +31,7 @@ export function TopNav({ variant = "landing", children, className }: Props) {
         {children ? (
           <div className="flex flex-1 items-center gap-7">{children}</div>
         ) : (
-          <div className="ml-auto flex items-center gap-7">
+          <div className="ml-auto flex items-center gap-3 sm:gap-7">
             <Link href="/search" className="cursor-pointer">
               Browse
             </Link>

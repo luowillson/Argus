@@ -24,8 +24,7 @@ const plexMono = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: "Veros — Open peer review, distilled",
-  description:
-    "Veros aggregates every reviewer comment on OpenReview, weights consensus, and tells you which sections deserve your hour.",
+  description: "Veros tells you which papers and sections deserve your hour.",
   icons: {
     icon: [
       {

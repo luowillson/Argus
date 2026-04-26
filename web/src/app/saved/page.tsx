@@ -69,7 +69,7 @@ export default function SavedPage() {
     <div className="min-h-screen bg-paper">
       <SearchHeaderBar />
 
-      <div className="px-16 pt-9 pb-1.5">
+      <div className="mx-auto max-w-[1100px] px-6 pt-9 pb-1.5 sm:px-10 lg:px-16">
         <h1 className="text-[26px] font-medium tracking-[-0.011em]">
           Your reading list
         </h1>
@@ -78,7 +78,7 @@ export default function SavedPage() {
         </div>
       </div>
 
-      <div className="px-16 pb-16">
+      <div className="mx-auto max-w-[1100px] px-6 pb-16 sm:px-10 lg:px-16">
         {loaded && savedCount === 0 ? (
           <div className="border-t border-rule px-0 py-16 text-center font-sans text-[13px] text-muted">
             No papers saved yet. Click{" "}

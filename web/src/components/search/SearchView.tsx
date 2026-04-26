@@ -7,7 +7,7 @@ import { ResultRow } from "@/components/search/ResultRow";
 import { PaperPendingCard } from "@/components/search/PaperPendingCard";
 import { PaginationBar } from "@/components/search/PaginationBar";
 import { SortControl } from "@/components/search/SortControl";
-import { type SearchSortKey } from "@/lib/api";
+import { getLocalSavedPaperIds, type SearchSortKey } from "@/lib/api";
 import { adaptPaperOut } from "@/lib/adapt";
 import {
   LOCAL_CORPUS_UPDATED_EVENT,
@@ -96,8 +96,23 @@ export function SearchView({
   const [remoteTotalPages, setRemoteTotalPages] = useState(totalPages);
   const [displayPage, setDisplayPage] = useState(currentPage);
   const [corpusRevision, setCorpusRevision] = useState(0);
+  const [savedIds, setSavedIds] = useState<Set<string>>(() => new Set());
   const [submitting, setSubmitting] = useState(false);
   const lastIssuedQ = useRef(initialQuery);
+
+  useEffect(() => {
+    function syncSavedIds() {
+      setSavedIds(new Set(getLocalSavedPaperIds()));
+    }
+
+    syncSavedIds();
+    window.addEventListener("storage", syncSavedIds);
+    window.addEventListener("focus", syncSavedIds);
+    return () => {
+      window.removeEventListener("storage", syncSavedIds);
+      window.removeEventListener("focus", syncSavedIds);
+    };
+  }, []);
 
   useEffect(() => {
     function syncInputToUrl() {
@@ -237,6 +252,7 @@ export function SearchView({
     remoteTotalCount ?? orderedResults.length + (showPendingCard ? 1 : 0);
   const effectiveTotalPages = remoteTotalPages || totalPages;
   const trimmedQuery = q.trim();
+  const showSavedIndicators = !trimmedQuery && !focusId;
   const effectiveSort = sortForQuery(trimmedQuery, activeSort);
   const effectiveSortLabel =
     trimmedQuery && effectiveSort === "relevance"
@@ -252,7 +268,7 @@ export function SearchView({
         onSubmitOverride={handleSubmit}
       />
 
-      <div className="px-16 pt-9 pb-1.5">
+      <div className="mx-auto max-w-[1100px] px-6 pt-9 pb-1.5 sm:px-10 lg:px-16">
         <h1 className="text-[26px] font-medium tracking-[-0.011em]">
           {trimmedQuery ? (
             <>
@@ -283,7 +299,7 @@ export function SearchView({
         )}
       </div>
 
-      <div className="px-16 pb-16">
+      <div className="mx-auto max-w-[1100px] px-6 pb-16 sm:px-10 lg:px-16">
         {totalCount === 0 ? (
           <div className="border-t border-rule px-0 py-16 text-center font-sans text-[13px] text-muted">
             No papers match this query yet. Try a different keyword or paste a
@@ -309,6 +325,7 @@ export function SearchView({
                 key={p.id}
                 paper={p}
                 isFirst={!showPendingCard && i === 0}
+                saved={showSavedIndicators && savedIds.has(p.id)}
               />
             ))}
             {!focusId && (

@@ -202,14 +202,14 @@ export function SemanticGraphCanvas({ graph }: Props) {
   }
 
   return (
-    <section className="relative mx-1 mt-2 mb-10 overflow-visible sm:mx-4 lg:mx-6 xl:mx-0 xl:-ml-12 xl:mr-0 xl:mt-18 xl:w-[min(1100px,calc(100%+72px))] xl:max-w-[1100px] xl:self-stretch">
+    <section className="relative mx-1 mt-2 h-[min(22dvh,170px)] overflow-visible sm:mx-4 sm:h-[min(30dvh,300px)] md:h-[min(34dvh,360px)] lg:mx-6 xl:mx-0 xl:-ml-12 xl:mr-0 xl:mt-0 xl:h-[min(720px,calc(100dvh-11rem))] xl:w-[min(1100px,calc(100%+72px))] xl:max-w-[1100px] xl:self-center">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_48%,rgba(255,255,255,0.56),transparent_22%),radial-gradient(circle_at_48%_50%,rgba(245,231,224,0.96),transparent_44%),radial-gradient(circle_at_72%_26%,rgba(122,28,28,0.11),transparent_18%),radial-gradient(circle_at_28%_68%,rgba(47,107,71,0.09),transparent_19%),radial-gradient(circle_at_55%_78%,rgba(79,115,151,0.08),transparent_18%)] blur-3xl" />
-      <div className="relative">
+      <div className="relative h-full">
         <canvas
           ref={canvasRef}
           width={WIDTH}
           height={HEIGHT}
-          className="aspect-[118/92] h-auto w-full max-w-[1120px] cursor-pointer overflow-visible"
+          className="h-full w-full max-w-[1120px] cursor-pointer overflow-visible"
           aria-label="Semantic graph of related papers"
           onPointerMove={handlePointerMove}
           onPointerLeave={handlePointerLeave}

@@ -40,6 +40,9 @@ const CorpusVersionSchema = z.object({
   latest_at: z.string().nullable().optional(),
 });
 const LOCAL_PAPER_OVERLAY_KEY = "veros:local-paper-overlay:v1";
+const API_CORPUS_VERSION_TIMEOUT_MS = 8_000;
+const API_CORPUS_DELTA_TIMEOUT_MS = 30_000;
+const API_CORPUS_FULL_TIMEOUT_MS = 60_000;
 export const LOCAL_CORPUS_UPDATED_EVENT = "veros:local-corpus-updated";
 
 let corpusPromise: Promise<PaperDetailDTO[]> | null = null;
@@ -51,6 +54,7 @@ let authorRankingsCache: {
   source: PaperDetailDTO[];
   rankings: AuthorRankingDTO[];
 } | null = null;
+let queuedRemoteSync = false;
 
 function isBrowser() {
   return typeof window !== "undefined";
@@ -88,6 +92,34 @@ function mergePapers(
 function notifyCorpusUpdated() {
   if (!isBrowser()) return;
   window.dispatchEvent(new CustomEvent(LOCAL_CORPUS_UPDATED_EVENT));
+}
+
+function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  if (init.signal) return fetch(input, init);
+  if (typeof AbortSignal.timeout === "function") {
+    return fetch(input, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  }
+
+  const controller = new AbortController();
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => {
+    globalThis.clearTimeout(timer);
+  });
+}
+
+function queueRemoteCorpusSync() {
+  if (!isBrowser() || queuedRemoteSync) return;
+  queuedRemoteSync = true;
+  window.setTimeout(() => {
+    queuedRemoteSync = false;
+    void syncLocalCorpusFromRemote().catch(() => {
+      // The next focus, SSE event, or fallback interval will try again.
+    });
+  }, 0);
 }
 
 function parseCorpusPayload(payload: unknown): {
@@ -150,9 +182,11 @@ async function fetchCorpus(): Promise<PaperDetailDTO[]> {
     return parsed.papers;
   } catch {
     try {
-      const res = await fetch(`${API_BASE_URL}/corpus/papers`, {
-        cache: "force-cache",
-      });
+      const res = await fetchWithTimeout(
+        `${API_BASE_URL}/corpus/papers`,
+        { cache: "force-cache" },
+        API_CORPUS_FULL_TIMEOUT_MS,
+      );
       if (!res.ok) throw new Error(`API corpus returned ${res.status}`);
       const parsed = parseCorpusPayload(await res.json());
       corpusVersion = parsed.version;
@@ -171,6 +205,7 @@ export async function loadLocalPaperCorpus(): Promise<PaperDetailDTO[]> {
     corpusById = new Map(papers.map((paper) => [paper.id, paper]));
     corpusCache.forEach((paper) => corpusById?.set(paper.id, paper));
     corpusCache.forEach(rememberPaper);
+    queueRemoteCorpusSync();
     return corpusCache;
   });
   return corpusPromise;
@@ -191,47 +226,55 @@ export function upsertLocalPaper(paper: PaperDetailDTO) {
 }
 
 export async function syncLocalCorpusFromRemote(): Promise<boolean> {
-  if (corpusCache === null && corpusVersion === null) return false;
+  if (corpusCache === null) return false;
 
-  const versionRes = await fetch(`${API_BASE_URL}/corpus/version`, {
-    cache: "no-store",
-  });
+  const versionRes = await fetchWithTimeout(
+    `${API_BASE_URL}/corpus/version`,
+    { cache: "no-store" },
+    API_CORPUS_VERSION_TIMEOUT_MS,
+  );
   if (!versionRes.ok) return false;
 
   const remoteVersion = CorpusVersionSchema.parse(await versionRes.json());
-  if (remoteVersion.corpus_version === corpusVersion) return false;
+  if (corpusVersion !== null && remoteVersion.corpus_version === corpusVersion) return false;
 
   if (corpusCursor) {
-    const changesRes = await fetch(
-      `${API_BASE_URL}/corpus/changes?since=${encodeURIComponent(corpusCursor)}`,
-      { cache: "no-store" },
-    );
-    if (changesRes.ok) {
-      const changes = CorpusChangesSchema.parse(await changesRes.json());
-      const byId = new Map((corpusCache ?? []).map((paper) => [paper.id, paper]));
-      changes.deleted_ids?.forEach((id) => byId.delete(id));
-      changes.papers.forEach((paper) => byId.set(paper.id, paper));
-
-      const changedIds = new Set(changes.papers.map((paper) => paper.id));
-      const deletedIds = new Set(changes.deleted_ids ?? []);
-      const overlay = loadLocalOverlay().filter(
-        (paper) => !changedIds.has(paper.id) && !deletedIds.has(paper.id),
+    try {
+      const changesRes = await fetchWithTimeout(
+        `${API_BASE_URL}/corpus/changes?since=${encodeURIComponent(corpusCursor)}`,
+        { cache: "no-store" },
+        API_CORPUS_DELTA_TIMEOUT_MS,
       );
-      saveLocalOverlay(overlay);
+      if (changesRes.ok) {
+        const changes = CorpusChangesSchema.parse(await changesRes.json());
+        const byId = new Map(corpusCache.map((paper) => [paper.id, paper]));
+        changes.deleted_ids?.forEach((id) => byId.delete(id));
+        changes.papers.forEach((paper) => byId.set(paper.id, paper));
 
-      corpusCache = mergePapers(Array.from(byId.values()), overlay);
-      corpusById = new Map(corpusCache.map((paper) => [paper.id, paper]));
-      corpusVersion = changes.corpus_version;
-      corpusCursor = changes.corpus_cursor ?? remoteVersion.latest_at ?? corpusCursor;
-      changes.papers.forEach(rememberPaper);
-      notifyCorpusUpdated();
-      return true;
+        const changedIds = new Set(changes.papers.map((paper) => paper.id));
+        const deletedIds = new Set(changes.deleted_ids ?? []);
+        const overlay = loadLocalOverlay().filter(
+          (paper) => !changedIds.has(paper.id) && !deletedIds.has(paper.id),
+        );
+        saveLocalOverlay(overlay);
+
+        corpusCache = mergePapers(Array.from(byId.values()), overlay);
+        corpusById = new Map(corpusCache.map((paper) => [paper.id, paper]));
+        corpusVersion = changes.corpus_version;
+        corpusCursor = changes.corpus_cursor ?? remoteVersion.latest_at ?? corpusCursor;
+        changes.papers.forEach(rememberPaper);
+        notifyCorpusUpdated();
+        return true;
+      }
+    } catch {
+      // Large gaps can make the delta endpoint miss its timeout; fetch all below.
     }
   }
 
-  const corpusRes = await fetch(
+  const corpusRes = await fetchWithTimeout(
     `${API_BASE_URL}/corpus/papers?version=${encodeURIComponent(remoteVersion.corpus_version)}`,
     { cache: "no-store" },
+    API_CORPUS_FULL_TIMEOUT_MS,
   );
   if (!corpusRes.ok) return false;
 

@@ -88,7 +88,7 @@ export function ExploreView({ initialTopic }: Props) {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-12 font-serif">
+    <div className="mx-auto max-w-[1100px] px-6 py-10 font-serif sm:px-10 lg:px-16">
       <div className="mb-10">
         <h1 className="font-sans text-[28px] font-semibold tracking-tight text-burgundy">
           Explore a topic

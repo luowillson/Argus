@@ -5,9 +5,9 @@ import { StatsFooter } from "@/components/landing/StatsFooter";
 
 export default function LandingPage() {
   return (
-    <div className="relative min-h-screen overflow-hidden bg-paper text-ink">
+    <div className="relative flex min-h-dvh flex-col overflow-hidden bg-paper text-ink">
       <TopNav />
-      <main className="relative z-10 pb-28 xl:grid xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] xl:items-start">
+      <main className="relative z-10 grid min-h-0 flex-1 pb-24 lg:pb-22 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] xl:items-center">
         <Hero />
         <SemanticGraph />
       </main>
