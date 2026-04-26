@@ -106,6 +106,46 @@ If the paper isn't in the database the API returns 202, the Celery worker fetche
 curl -X POST http://localhost:8000/api/v1/papers/F76bwRSLeK/ingest
 ```
 
+## Bulk ingest papers from OpenReview
+
+Use this when you want to fetch a whole OpenReview venue and add the papers to
+Postgres automatically. Run it from `api/` so it uses `api/.env`.
+
+Start with a small test:
+
+```bash
+cd api
+uv run python scripts/ingest_openreview_venue.py \
+  --venue ICLR.cc/2025/Conference \
+  --decision accepted \
+  --limit 5 \
+  --skip-analysis
+```
+
+If that looks good, remove `--limit` to ingest the venue:
+
+```bash
+uv run python scripts/ingest_openreview_venue.py \
+  --venue ICLR.cc/2025/Conference \
+  --decision accepted \
+  --skip-analysis
+```
+
+By default, the script skips papers already in the database. Add `--force` only
+when you want to re-fetch and update existing papers. Remove `--skip-analysis`
+if you also want the LLM summaries generated during the import.
+Use `--decision all` if you want every submission rather than only accepted
+papers.
+If the script is interrupted, rerun the same command; already-imported papers
+will be skipped. Each paper has a 180-second timeout by default so one slow
+OpenReview response cannot freeze the whole run.
+
+After a bulk ingest, refresh the browser's local search corpus:
+
+```bash
+uv run python scripts/export_static_corpus.py
+```
+
 ---
 
 ## Creating a local database from repo data
@@ -311,11 +351,60 @@ Base: `http://localhost:8000/api/v1`
 | GET | `/papers/{id}/status` | `{ingest, analysis}` status |
 | POST | `/papers/{id}/ingest` | Synchronous ingest |
 | POST | `/papers/{id}/analyze` | Re-run LLM analysis |
+| POST | `/pathways/from-paper/{id}` | Build or reuse a cached learning pathway for one paper |
+| POST | `/pathways/from-topic` | Build or reuse a cached learning pathway for a topic |
+| GET | `/pathways/{id}` | Fetch a previously generated learning pathway |
 | GET | `/saved` | Demo user's reading list |
 | POST | `/saved` | Save a paper `{paper_id}` |
 | DELETE | `/saved/{id}` | Unsave a paper |
 
 Interactive docs are available at `http://localhost:8000/docs`.
+
+---
+
+## Learning pathways (MVP)
+
+The MVP pathway feature is local-first:
+
+- it searches only the already-ingested local corpus
+- uses the LLM once to infer conceptual learning stages
+- retrieves local papers separately for each stage
+- ranks candidates using similarity, anchor concepts, Veros score, and clarity
+- caches the generated pathway in Postgres for reuse
+- marks weak or missing stages as `pending_enrichment`
+- enqueues a bounded background OpenReview enrichment job for weak stages
+
+Create a pathway from a seed paper:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/pathways/from-paper/F76bwRSLeK
+```
+
+Create a pathway from a topic:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/pathways/from-topic \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"sparse autoencoders for language models","limit":6}'
+```
+
+By default, repeated requests reuse a cached pathway for the same user and
+seed. To force regeneration while testing, add `?force=true`:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/pathways/from-paper/F76bwRSLeK?force=true"
+```
+
+When a pathway has broad weak coverage from the local corpus, the response may
+return `status: "pending_enrichment"` and include per-stage `match_quality`,
+`search_query`, and `anchor_concepts`. By default, Veros only escalates to
+background OpenReview enrichment when at least two stages are weak or missing,
+or when fewer than two stages are strong. A background Celery job then searches
+a small set of OpenReview venues for candidate papers, ingests any strong
+matches it finds, and regenerates the pathway.
+
+This MVP does not live-search the web. If the local corpus is too sparse, the
+endpoint returns an error instead of scraping external sources inline.
 
 ---
 

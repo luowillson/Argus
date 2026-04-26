@@ -26,10 +26,21 @@ class OpenAICompatibleProvider(LLMProvider):
         model: str,
         name: str,
         json_mode: bool = True,
+        timeout: float = 90.0,
     ) -> None:
         if not api_key:
             raise ValueError(f"{name}: api_key is required")
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        # Without a timeout the SDK will wait forever; Gemma's reasoning passes
+        # have stalled requests for >5 min and pinned every uvicorn threadpool
+        # worker. The SDK also retries failed requests up to 2 times by default,
+        # which silently triples the wall-clock budget — disable retries so the
+        # explore service's deterministic fallback kicks in promptly on stalls.
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=0,
+        )
         self._model = model
         self.name = name
         self._json_mode = json_mode

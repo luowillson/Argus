@@ -26,6 +26,15 @@ export const metadata: Metadata = {
   title: "Veros — Open peer review, distilled",
   description:
     "Veros aggregates every reviewer comment on OpenReview, weights consensus, and tells you which sections deserve your hour.",
+  icons: {
+    icon: [
+      {
+        url: "/icon.svg",
+        type: "image/svg+xml",
+      },
+    ],
+    shortcut: "/icon.svg",
+  },
 };
 
 export default function RootLayout({

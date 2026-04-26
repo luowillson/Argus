@@ -1,16 +1,28 @@
-import { API_BASE_URL } from "@/lib/api";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
-const STATS_TIMEOUT_MS = 1200;
+type StaticCorpusPaper = {
+  reviewers?: unknown[];
+};
 
 async function fetchStats(): Promise<{ paper_count: number; review_count: number }> {
   try {
-    const res = await fetch(`${API_BASE_URL}/stats`, {
-      next: { revalidate: 60 },
-      signal: AbortSignal.timeout(STATS_TIMEOUT_MS),
-    });
-    if (res.ok) return res.json();
+    const filePath = path.join(process.cwd(), "public", "data", "papers.json");
+    const raw = await readFile(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as {
+      paper_count?: number;
+      papers?: StaticCorpusPaper[];
+    };
+    const papers = parsed.papers ?? [];
+    return {
+      paper_count: parsed.paper_count ?? papers.length,
+      review_count: papers.reduce(
+        (sum, paper) => sum + (Array.isArray(paper.reviewers) ? paper.reviewers.length : 0),
+        0,
+      ),
+    };
   } catch {
-    // API unreachable — show placeholder
+    // Static corpus unavailable — show placeholder.
   }
   return { paper_count: 0, review_count: 0 };
 }

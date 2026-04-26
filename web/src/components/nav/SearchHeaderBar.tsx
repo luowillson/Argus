@@ -72,14 +72,17 @@ export function SearchHeaderBar({
         />
       </form>
 
-      <nav className="ml-auto flex items-center gap-7 opacity-90">
+      <nav className="ml-auto flex items-center gap-7">
         <Link href="/search" className="cursor-pointer">
           Browse
         </Link>
-        <Link
-          href="/saved"
-          className="cursor-pointer border-l border-cream/25 pl-7"
-        >
+        <Link href="/ranking" className="cursor-pointer">
+          Ranking
+        </Link>
+        <Link href="/explore" className="cursor-pointer">
+          Explore
+        </Link>
+        <Link href="/saved" className="cursor-pointer">
           Saved
         </Link>
       </nav>

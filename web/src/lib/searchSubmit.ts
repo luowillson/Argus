@@ -1,5 +1,4 @@
 import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
-import { getLocalSearchDestination } from "./localPapers";
 import { getSearchDestination } from "./query";
 
 /**
@@ -26,6 +25,7 @@ export async function submitSearch(
     return dest.href;
   }
 
+  const { getLocalSearchDestination } = await import("./localPapers");
   const href = await getLocalSearchDestination(trimmed);
   (opts.replace ? router.replace : router.push)(href);
   return href;

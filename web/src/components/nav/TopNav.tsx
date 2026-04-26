@@ -29,12 +29,17 @@ export function TopNav({ variant = "landing", children, className }: Props) {
         {children ? (
           <div className="flex flex-1 items-center gap-7">{children}</div>
         ) : (
-          <div className="ml-auto flex items-center gap-7 opacity-90">
-            <Link href="/search" className="cursor-pointer">Browse</Link>
-            <Link
-              href="/saved"
-              className="cursor-pointer border-l border-cream/25 pl-7"
-            >
+          <div className="ml-auto flex items-center gap-7">
+            <Link href="/search" className="cursor-pointer">
+              Browse
+            </Link>
+            <Link href="/ranking" className="cursor-pointer">
+              Ranking
+            </Link>
+            <Link href="/explore" className="cursor-pointer">
+              Explore
+            </Link>
+            <Link href="/saved" className="cursor-pointer">
               Saved
             </Link>
           </div>

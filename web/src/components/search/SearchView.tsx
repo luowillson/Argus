@@ -33,17 +33,41 @@ type Props = {
 const DEBOUNCE_MS = 450;
 const PAGE_SIZE = 20;
 const MIN_LIVE_QUERY_CHARS = 3;
+const SORT_LABELS: Record<SearchSortKey, string> = {
+  relevance: "relevance",
+  score: "Veros score",
+  novelty: "novelty",
+  technical: "technical",
+  clarity: "clarity",
+  impact: "impact",
+};
+
+function sortForQuery(query: string, sort: SearchSortKey): SearchSortKey {
+  return !query && sort === "relevance" ? "score" : sort;
+}
 
 function liveSearchHref(query: string, sort: SearchSortKey) {
+  const normalizedSort = sortForQuery(query, sort);
   const params = new URLSearchParams();
   if (query) params.set("q", query);
-  if (sort !== (query ? "relevance" : "score")) params.set("sort", sort);
+  if (normalizedSort !== (query ? "relevance" : "score")) {
+    params.set("sort", normalizedSort);
+  }
   const qs = params.toString();
   return qs ? `/search?${qs}` : "/search";
 }
 
 function replaceBrowserUrl(href: string) {
   window.history.replaceState(window.history.state, "", href);
+}
+
+function queryFromBrowserUrl() {
+  return new URLSearchParams(window.location.search).get("q")?.trim() ?? "";
+}
+
+function pageFromBrowserUrl() {
+  const raw = new URLSearchParams(window.location.search).get("page");
+  return Math.max(1, parseInt(raw ?? "1", 10) || 1);
 }
 
 export function SearchView({
@@ -70,9 +94,25 @@ export function SearchView({
   const [notFound, setNotFound] = useState(initialNotFound);
   const [remoteTotalCount, setRemoteTotalCount] = useState(initialTotalCount ?? initialResults.length);
   const [remoteTotalPages, setRemoteTotalPages] = useState(totalPages);
+  const [displayPage, setDisplayPage] = useState(currentPage);
   const [corpusRevision, setCorpusRevision] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const lastIssuedQ = useRef(initialQuery);
+
+  useEffect(() => {
+    function syncInputToUrl() {
+      const urlQuery = queryFromBrowserUrl();
+      lastIssuedQ.current = urlQuery;
+      setQ(urlQuery);
+      setDisplayPage(pageFromBrowserUrl());
+    }
+
+    syncInputToUrl();
+    window.addEventListener("popstate", syncInputToUrl);
+    return () => {
+      window.removeEventListener("popstate", syncInputToUrl);
+    };
+  }, []);
 
   useEffect(() => {
     function bumpCorpusRevision() {
@@ -88,19 +128,28 @@ export function SearchView({
   useEffect(() => {
     if (!clientFetch) return;
     const controller = new AbortController();
-    const offset = (currentPage - 1) * PAGE_SIZE;
+    const urlPage = pageFromBrowserUrl();
+    const offset = (urlPage - 1) * PAGE_SIZE;
     const mode = initialFocusId ? "specific" : "topic";
+    const urlQuery = queryFromBrowserUrl();
+    const normalizedSort = sortForQuery(urlQuery, activeSort);
 
     async function loadPage() {
       try {
         const page = await searchLocalPapers(
-          initialQuery,
+          urlQuery,
           PAGE_SIZE,
           offset,
           mode,
-          activeSort,
+          normalizedSort,
         );
         if (controller.signal.aborted) return;
+        if (queryFromBrowserUrl() !== urlQuery || pageFromBrowserUrl() !== urlPage) {
+          return;
+        }
+        setQ(urlQuery);
+        lastIssuedQ.current = urlQuery;
+        setDisplayPage(urlPage);
         setResults(page.results.map(adaptPaperOut));
         setRemoteTotalCount(page.total);
         setRemoteTotalPages(Math.max(1, Math.ceil(page.total / PAGE_SIZE)));
@@ -122,7 +171,8 @@ export function SearchView({
     const handle = setTimeout(async () => {
       lastIssuedQ.current = q;
       try {
-        const page = await searchLocalPapers(trimmed, 20, 0, "topic", activeSort);
+        const normalizedSort = sortForQuery(trimmed, activeSort);
+        const page = await searchLocalPapers(trimmed, 20, 0, "topic", normalizedSort);
         if (controller.signal.aborted) return;
         const mapped = page.results.map(adaptPaperOut);
         // Live typing always re-enters topic mode and clears focus/notFound.
@@ -132,7 +182,8 @@ export function SearchView({
         setFocusId(null);
         setPendingTitle(null);
         setNotFound(false);
-        replaceBrowserUrl(liveSearchHref(trimmed, activeSort));
+        setDisplayPage(1);
+        replaceBrowserUrl(liveSearchHref(trimmed, normalizedSort));
       } catch (err) {
         if ((err as { name?: string })?.name !== "AbortError") {
           // swallow other errors silently — keep prior results
@@ -146,7 +197,22 @@ export function SearchView({
   }, [activeSort, q]);
 
   async function handleSubmit(query: string) {
-    if (!query.trim() || submitting) return;
+    const trimmed = query.trim();
+    if (!trimmed) {
+      lastIssuedQ.current = "";
+      setQ("");
+      const page = await searchLocalPapers("", PAGE_SIZE, 0, "topic", "score");
+      setResults(page.results.map(adaptPaperOut));
+      setRemoteTotalCount(page.total);
+      setRemoteTotalPages(Math.max(1, Math.ceil(page.total / PAGE_SIZE)));
+      setFocusId(null);
+      setPendingTitle(null);
+      setNotFound(false);
+      setDisplayPage(1);
+      replaceBrowserUrl("/search");
+      return;
+    }
+    if (submitting) return;
     setSubmitting(true);
     try {
       // submitSearch handles the URL/ID fast-path, the lookupSearch call,
@@ -170,10 +236,12 @@ export function SearchView({
   const totalCount =
     remoteTotalCount ?? orderedResults.length + (showPendingCard ? 1 : 0);
   const effectiveTotalPages = remoteTotalPages || totalPages;
+  const trimmedQuery = q.trim();
+  const effectiveSort = sortForQuery(trimmedQuery, activeSort);
   const effectiveSortLabel =
-    q.trim() && activeSort === "relevance"
+    trimmedQuery && effectiveSort === "relevance"
       ? "sorted by relevance"
-      : `sorted by ${sortLabel}`;
+      : `sorted by ${SORT_LABELS[effectiveSort] ?? sortLabel}`;
 
   return (
     <div className="min-h-screen bg-paper">
@@ -186,11 +254,11 @@ export function SearchView({
 
       <div className="px-16 pt-9 pb-1.5">
         <h1 className="text-[26px] font-medium tracking-[-0.011em]">
-          {q.trim() ? (
+          {trimmedQuery ? (
             <>
               Results for{" "}
               <em className="font-serif italic text-burgundy">
-                &ldquo;{q.trim()}&rdquo;
+                &ldquo;{trimmedQuery}&rdquo;
               </em>
             </>
           ) : (
@@ -203,13 +271,13 @@ export function SearchView({
         </div>
         {!focusId && (
           <div className="mt-4">
-            <SortControl query={q.trim()} activeSort={activeSort} />
+            <SortControl query={trimmedQuery} activeSort={effectiveSort} />
           </div>
         )}
         {notFound && (
           <div className="mt-3 border-l-2 border-burgundy/60 bg-cream/50 px-3 py-2 font-sans text-[13px] text-prose">
             We couldn&rsquo;t find a paper matching{" "}
-            <em className="font-serif italic">&ldquo;{q.trim()}&rdquo;</em>{" "}
+            <em className="font-serif italic">&ldquo;{trimmedQuery}&rdquo;</em>{" "}
             on OpenReview. Showing closest matches from your library instead.
           </div>
         )}
@@ -245,10 +313,10 @@ export function SearchView({
             ))}
             {!focusId && (
               <PaginationBar
-                query={initialQuery}
-                currentPage={currentPage}
+                query={trimmedQuery}
+                currentPage={displayPage}
                 totalPages={effectiveTotalPages}
-                activeSort={activeSort}
+                activeSort={effectiveSort}
               />
             )}
           </div>
