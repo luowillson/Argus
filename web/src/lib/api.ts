@@ -4,17 +4,21 @@ export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 const API_READ_TIMEOUT_MS = 3500;
+const RANKING_API_TIMEOUT_MS = 15000;
 const PAPER_CACHE_TTL_MS = 30 * 60 * 1000;
 const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const SAVED_PAPER_IDS_KEY = "veros:saved-paper-ids:v1";
 
-function withReadTimeout(init: RequestInit = {}): RequestInit {
+function withReadTimeout(
+  init: RequestInit = {},
+  timeoutMs = API_READ_TIMEOUT_MS,
+): RequestInit {
   if (init.signal) return init;
   if (typeof AbortSignal.timeout === "function") {
-    return { ...init, signal: AbortSignal.timeout(API_READ_TIMEOUT_MS) };
+    return { ...init, signal: AbortSignal.timeout(timeoutMs) };
   }
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), API_READ_TIMEOUT_MS);
+  setTimeout(() => controller.abort(), timeoutMs);
   return { ...init, signal: controller.signal };
 }
 
@@ -395,6 +399,42 @@ export async function fetchSearchCount(query: string): Promise<number> {
   if (!res.ok) return 0;
   const data = z.object({ total: z.number() }).parse(await res.json());
   return data.total;
+}
+
+export const AuthorRankingSchema = z.object({
+  author: z.string(),
+  paper_count: z.number(),
+  average_score: z.number(),
+  top_paper_id: z.string().nullable(),
+  top_paper_title: z.string().nullable(),
+  top_score: z.number().nullable(),
+  lowest_paper_id: z.string().nullable(),
+  lowest_paper_title: z.string().nullable(),
+  lowest_score: z.number().nullable(),
+});
+
+export type AuthorRankingDTO = z.infer<typeof AuthorRankingSchema>;
+export type AuthorRankingOrder = "best" | "worst";
+
+export async function fetchAuthorRankings(
+  limit = 100,
+  minPapers = 3,
+  order: AuthorRankingOrder = "best",
+  query = "",
+  init?: RequestInit,
+): Promise<AuthorRankingDTO[]> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    min_papers: String(minPapers),
+    order,
+  });
+  if (query.trim()) params.set("q", query.trim());
+  const res = await fetch(
+    `${API_BASE_URL}/rankings/authors?${params}`,
+    withReadTimeout({ cache: "no-store", ...init }, RANKING_API_TIMEOUT_MS),
+  );
+  if (!res.ok) throw new Error(`Rankings API error ${res.status}`);
+  return z.array(AuthorRankingSchema).parse(await res.json());
 }
 
 export async function fetchSaved(init?: RequestInit): Promise<PaperOutDTO[]> {

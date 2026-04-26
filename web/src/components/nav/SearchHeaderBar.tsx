@@ -76,6 +76,9 @@ export function SearchHeaderBar({
         <Link href="/search" className="cursor-pointer">
           Browse
         </Link>
+        <Link href="/ranking" className="cursor-pointer">
+          Ranking
+        </Link>
         <Link
           href="/saved"
           className="cursor-pointer border-l border-cream/25 pl-7"
