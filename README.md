@@ -117,6 +117,7 @@ Start with a small test:
 cd api
 uv run python scripts/ingest_openreview_venue.py \
   --venue ICLR.cc/2025/Conference \
+  --decision accepted \
   --limit 5 \
   --skip-analysis
 ```
@@ -126,12 +127,15 @@ If that looks good, remove `--limit` to ingest the venue:
 ```bash
 uv run python scripts/ingest_openreview_venue.py \
   --venue ICLR.cc/2025/Conference \
+  --decision accepted \
   --skip-analysis
 ```
 
 By default, the script skips papers already in the database. Add `--force` only
 when you want to re-fetch and update existing papers. Remove `--skip-analysis`
 if you also want the LLM summaries generated during the import.
+Use `--decision all` if you want every submission rather than only accepted
+papers.
 If the script is interrupted, rerun the same command; already-imported papers
 will be skipped. Each paper has a 180-second timeout by default so one slow
 OpenReview response cannot freeze the whole run.

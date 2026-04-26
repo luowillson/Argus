@@ -15,6 +15,8 @@ from app.db.session import get_engine
 from app.services.ingest import ingest_paper
 from app.services.openreview_client import build_client
 
+DecisionFilter = str
+
 
 @dataclass(frozen=True)
 class OpenReviewSubmission:
@@ -51,6 +53,11 @@ def _content_value(content: dict[str, Any], key: str) -> Any:
     return raw
 
 
+def _content_from_note(note: Any) -> dict[str, Any]:
+    content = getattr(note, "content", {}) or {}
+    return content if isinstance(content, dict) else {}
+
+
 def _invitation_names(note: Any) -> list[str]:
     invitations = getattr(note, "invitations", None)
     if invitations:
@@ -60,8 +67,8 @@ def _invitation_names(note: Any) -> list[str]:
 
 
 def _venue_from_note(note: Any) -> str | None:
-    content = getattr(note, "content", {}) or {}
-    if not isinstance(content, dict):
+    content = _content_from_note(note)
+    if not content:
         return getattr(note, "domain", None)
     for key in ("venueid", "venue"):
         value = _content_value(content, key)
@@ -71,11 +78,43 @@ def _venue_from_note(note: Any) -> str | None:
 
 
 def _title_from_note(note: Any) -> str:
-    content = getattr(note, "content", {}) or {}
-    if not isinstance(content, dict):
+    content = _content_from_note(note)
+    if not content:
         return ""
     title = _content_value(content, "title")
     return title.strip() if isinstance(title, str) else ""
+
+
+def _decision_text_from_note(note: Any) -> str:
+    content = _content_from_note(note)
+    values = [
+        _content_value(content, key)
+        for key in ("venue", "decision", "recommendation", "Decision")
+    ]
+    return " ".join(value for value in values if isinstance(value, str)).strip().casefold()
+
+
+def _matches_decision_filter(note: Any, decision: DecisionFilter) -> bool:
+    if decision == "all":
+        return True
+
+    text = _decision_text_from_note(note)
+    is_rejected = any(word in text for word in ("reject", "withdraw", "desk reject"))
+    is_accepted = (
+        not is_rejected
+        and (
+            "accept" in text
+            or "poster" in text
+            or "oral" in text
+            or "spotlight" in text
+            or "notable" in text
+        )
+    )
+    if decision == "accepted":
+        return is_accepted
+    if decision == "rejected":
+        return is_rejected
+    return True
 
 
 def _note_matches_venue(note: Any, venue: str) -> bool:
@@ -87,7 +126,12 @@ def _note_matches_venue(note: Any, venue: str) -> bool:
     return any(inv == venue or inv.startswith(f"{venue}/") for inv in _invitation_names(note))
 
 
-def fetch_openreview_submissions(client: Any, venue: str) -> list[OpenReviewSubmission]:
+def fetch_openreview_submissions(
+    client: Any,
+    venue: str,
+    *,
+    decision: DecisionFilter = "all",
+) -> list[OpenReviewSubmission]:
     notes: list[Any] = []
     attempts: list[dict[str, Any]] = [
         {"invitation": f"{venue}/-/Submission"},
@@ -108,7 +152,12 @@ def fetch_openreview_submissions(client: Any, venue: str) -> list[OpenReviewSubm
     seen_ids: set[str] = set()
     for note in notes:
         note_id = getattr(note, "id", None)
-        if not note_id or note_id in seen_ids or not _note_matches_venue(note, venue):
+        if (
+            not note_id
+            or note_id in seen_ids
+            or not _note_matches_venue(note, venue)
+            or not _matches_decision_filter(note, decision)
+        ):
             continue
         title = _title_from_note(note)
         if not title:
@@ -161,6 +210,12 @@ def parse_args() -> argparse.Namespace:
         help="Ingest papers and scores only; do not call the LLM analysis step.",
     )
     parser.add_argument(
+        "--decision",
+        choices=("all", "accepted", "rejected"),
+        default="all",
+        help="Filter submissions by decision status. Defaults to all.",
+    )
+    parser.add_argument(
         "--paper-timeout",
         type=int,
         default=180,
@@ -180,8 +235,11 @@ def main() -> None:
         username=settings.openreview_username or None,
         password=settings.openreview_password or None,
     )
-    submissions = fetch_openreview_submissions(client, args.venue)
-    print(f"Found {len(submissions)} OpenReview submissions for {args.venue}.")
+    submissions = fetch_openreview_submissions(client, args.venue, decision=args.decision)
+    print(
+        f"Found {len(submissions)} OpenReview submissions for {args.venue} "
+        f"(decision={args.decision})."
+    )
 
     seen_start = args.start_after is None
     ingested = 0
@@ -242,6 +300,7 @@ def main() -> None:
         f"skipped_existing={skipped_existing}, "
         f"skipped_before_start={skipped_before_start}, "
         f"failed={failed}, "
+        f"decision={args.decision}, "
         f"venue={args.venue}"
     )
 

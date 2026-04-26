@@ -54,12 +54,14 @@ from `api/`:
 cd ../api
 uv run python scripts/ingest_openreview_venue.py \
   --venue ICLR.cc/2025/Conference \
+  --decision accepted \
   --limit 5 \
   --skip-analysis
 ```
 
 Remove `--limit 5` for the full venue. The script skips existing papers by
-default; add `--force` only when you want to refresh them. After importing,
+default; add `--force` only when you want to refresh them. Use `--decision all`
+if you want every submission rather than only accepted papers. After importing,
 rerun `uv run python scripts/export_static_corpus.py` so the web app's local
 search JSON includes the new papers. If the import is interrupted, rerun the
 same command; already-imported papers will be skipped. Each paper has a
