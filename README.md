@@ -106,39 +106,45 @@ If the paper isn't in the database the API returns 202, the Celery worker fetche
 curl -X POST http://localhost:8000/api/v1/papers/F76bwRSLeK/ingest
 ```
 
-## Bulk ingest papers from OpenReview
+## Bulk fetch papers from OpenReview
 
-Use this when you want to fetch a whole OpenReview venue and add the papers to
-Postgres automatically. Run it from `api/` so it uses `api/.env`.
+Use this when you want to fetch a whole OpenReview venue. Keep the OpenReview
+fetch separate from Postgres: first write a local JSONL file, then import that
+file into the database.
 
-Start with a small test:
+Fetch a small local sample first:
 
 ```bash
 cd api
-uv run python scripts/ingest_openreview_venue.py \
+uv run python scripts/fetch_openreview_venue_jsonl.py \
   --venue ICLR.cc/2025/Conference \
   --decision accepted \
   --limit 5 \
-  --skip-analysis
+  --output ../data/iclr_2025_accepted_reviews.jsonl
 ```
 
-If that looks good, remove `--limit` to ingest the venue:
+If that looks good, remove `--limit` to fetch the full accepted venue:
 
 ```bash
-uv run python scripts/ingest_openreview_venue.py \
+uv run python scripts/fetch_openreview_venue_jsonl.py \
   --venue ICLR.cc/2025/Conference \
   --decision accepted \
-  --skip-analysis
+  --output ../data/iclr_2025_accepted_reviews.jsonl
 ```
 
-By default, the script skips papers already in the database. Add `--force` only
-when you want to re-fetch and update existing papers. Remove `--skip-analysis`
-if you also want the LLM summaries generated during the import.
-Use `--decision all` if you want every submission rather than only accepted
-papers.
-If the script is interrupted, rerun the same command; already-imported papers
-will be skipped. Each paper has a 180-second timeout by default so one slow
-OpenReview response cannot freeze the whole run.
+The fetcher is resumable. If it is interrupted, rerun the same command and rows
+already present in the local JSONL file will be skipped. Use `--decision all` if
+you want every submission rather than only accepted papers.
+
+Then import the local file into Postgres:
+
+```bash
+uv run python scripts/import_openreview_jsonl.py \
+  --source ../data/iclr_2025_accepted_reviews.jsonl
+```
+
+The import step skips existing papers by default. Add `--force` only when you
+want to refresh existing database rows.
 
 After a bulk ingest, refresh the browser's local search corpus:
 

@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp
+import queue
 import signal
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import text as sa_text
 from sqlmodel import Session, select
 
 from app.config import get_settings
-from app.db.models import Paper
+from app.db.models import VerosScore
 from app.db.session import get_engine
 from app.services.ingest import ingest_paper
 from app.services.openreview_client import build_client
 
 DecisionFilter = str
+WorkerPayload = dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -29,13 +33,13 @@ class PaperTimeoutError(TimeoutError):
 
 
 @contextmanager
-def paper_timeout(seconds: int):
+def operation_timeout(seconds: int, label: str):
     if seconds <= 0:
         yield
         return
 
     def _raise_timeout(_signum: int, _frame: Any) -> None:
-        raise PaperTimeoutError(f"paper ingest exceeded {seconds}s")
+        raise PaperTimeoutError(f"{label} exceeded {seconds}s")
 
     previous_handler = signal.signal(signal.SIGALRM, _raise_timeout)
     signal.alarm(seconds)
@@ -44,6 +48,76 @@ def paper_timeout(seconds: int):
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous_handler)
+
+
+def configure_db_timeouts(db: Session, statement_timeout_seconds: int) -> None:
+    if statement_timeout_seconds <= 0:
+        return
+    statement_timeout_ms = int(statement_timeout_seconds * 1000)
+    lock_timeout_ms = min(statement_timeout_ms, 15_000)
+    db.execute(sa_text(f"SET statement_timeout = {statement_timeout_ms}"))
+    db.execute(sa_text(f"SET lock_timeout = {lock_timeout_ms}"))
+
+
+def _ingest_paper_worker(
+    paper_id: str,
+    run_analysis: bool,
+    db_statement_timeout: int,
+    result_queue: mp.Queue,
+) -> None:
+    try:
+        with Session(get_engine()) as db:
+            configure_db_timeouts(db, db_statement_timeout)
+            result = ingest_paper(db, paper_id, run_analysis=run_analysis)
+        result_queue.put({"ok": True, "result": result})
+    except BaseException as exc:
+        result_queue.put(
+            {
+                "ok": False,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+        )
+
+
+def ingest_paper_in_child_process(
+    paper_id: str,
+    *,
+    run_analysis: bool,
+    paper_timeout: int,
+    db_statement_timeout: int,
+) -> dict[str, object]:
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+    process = ctx.Process(
+        target=_ingest_paper_worker,
+        args=(paper_id, run_analysis, db_statement_timeout, result_queue),
+    )
+    process.start()
+    process.join(timeout=paper_timeout if paper_timeout > 0 else None)
+
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=10)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=5)
+        raise PaperTimeoutError(f"paper ingest for {paper_id} exceeded {paper_timeout}s")
+
+    try:
+        payload: WorkerPayload = result_queue.get_nowait()
+    except queue.Empty as exc:
+        raise RuntimeError(f"paper ingest worker exited with code {process.exitcode}") from exc
+
+    if not payload.get("ok"):
+        error_type = payload.get("error_type", "Error")
+        error = payload.get("error", "")
+        raise RuntimeError(f"{error_type}: {error}")
+
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError("paper ingest worker returned an invalid result")
+    return result
 
 
 def _content_value(content: dict[str, Any], key: str) -> Any:
@@ -221,6 +295,18 @@ def parse_args() -> argparse.Namespace:
         default=180,
         help="Maximum seconds to spend on one paper before skipping it. Use 0 to disable.",
     )
+    parser.add_argument(
+        "--discovery-timeout",
+        type=int,
+        default=180,
+        help="Maximum seconds to spend listing venue submissions. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--db-statement-timeout",
+        type=int,
+        default=60,
+        help="Maximum seconds for one Postgres statement before it is canceled. Use 0 to disable.",
+    )
     return parser.parse_args()
 
 
@@ -235,7 +321,8 @@ def main() -> None:
         username=settings.openreview_username or None,
         password=settings.openreview_password or None,
     )
-    submissions = fetch_openreview_submissions(client, args.venue, decision=args.decision)
+    with operation_timeout(args.discovery_timeout, "OpenReview submission discovery"):
+        submissions = fetch_openreview_submissions(client, args.venue, decision=args.decision)
     print(
         f"Found {len(submissions)} OpenReview submissions for {args.venue} "
         f"(decision={args.decision})."
@@ -246,11 +333,15 @@ def main() -> None:
     skipped_existing = 0
     skipped_before_start = 0
     failed = 0
-    existing_paper_ids: set[str] = set()
+    existing_scored_paper_ids: set[str] = set()
     if not args.force:
         with Session(get_engine()) as db:
-            existing_paper_ids = set(db.exec(select(Paper.id)).all())
-        print(f"Loaded {len(existing_paper_ids)} existing paper id(s) for skip checks.")
+            configure_db_timeouts(db, args.db_statement_timeout)
+            existing_scored_paper_ids = set(db.exec(select(VerosScore.paper_id)).all())
+        print(
+            f"Loaded {len(existing_scored_paper_ids)} existing scored paper id(s) "
+            "for skip checks."
+        )
 
     for submission in submissions:
         if not seen_start:
@@ -261,7 +352,7 @@ def main() -> None:
         if args.limit is not None and ingested >= args.limit:
             break
 
-        if submission.id in existing_paper_ids:
+        if submission.id in existing_scored_paper_ids:
             skipped_existing += 1
             continue
 
@@ -272,13 +363,13 @@ def main() -> None:
 
         print(f"ingesting {submission.id}: {submission.title}", flush=True)
         try:
-            with Session(get_engine()) as db, paper_timeout(args.paper_timeout):
-                result = ingest_paper(
-                    db,
-                    submission.id,
-                    run_analysis=not args.skip_analysis,
-                )
-            existing_paper_ids.add(submission.id)
+            result = ingest_paper_in_child_process(
+                submission.id,
+                run_analysis=not args.skip_analysis,
+                paper_timeout=args.paper_timeout,
+                db_statement_timeout=args.db_statement_timeout,
+            )
+            existing_scored_paper_ids.add(submission.id)
             ingested += 1
             print(
                 f"[{ingested}] {result['paper_id']}: "

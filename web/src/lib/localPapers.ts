@@ -142,7 +142,7 @@ function mockDetailCorpus(): PaperDetailDTO[] {
 
 async function fetchCorpus(): Promise<PaperDetailDTO[]> {
   try {
-    const res = await fetch("/data/papers.json", { cache: "force-cache" });
+    const res = await fetch("/data/papers.json", { cache: "no-store" });
     if (!res.ok) throw new Error(`Static corpus returned ${res.status}`);
     const parsed = parseCorpusPayload(await res.json());
     corpusVersion = parsed.version;
