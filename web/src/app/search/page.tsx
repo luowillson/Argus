@@ -91,6 +91,14 @@ export default async function SearchPage({
 
   return (
     <SearchView
+      key={[
+        query,
+        activeSort,
+        currentPage,
+        focus ?? "",
+        notFound ?? "",
+        pending ?? "",
+      ].join(":")}
       initialQuery={query}
       initialResults={results}
       initialFocusId={focus}

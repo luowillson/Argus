@@ -49,9 +49,9 @@ export function SearchView({
   );
   const [notFound, setNotFound] = useState(initialNotFound);
   const [submitting, setSubmitting] = useState(false);
+  const lastIssuedQ = useRef(initialQuery);
 
   // Debounced live topic search on typing.
-  const lastIssuedQ = useRef(initialQuery);
   useEffect(() => {
     if (q === lastIssuedQ.current) return;
     const trimmed = q.trim();
