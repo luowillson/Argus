@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Newsreader, Inter, IBM_Plex_Mono } from "next/font/google";
+import { CorpusSync } from "@/components/CorpusSync";
 import "./globals.css";
 import "katex/dist/katex.min.css";
 
@@ -36,6 +37,7 @@ export default function RootLayout({
       className={`${newsreader.variable} ${inter.variable} ${plexMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-paper text-ink font-serif">
+        <CorpusSync />
         {children}
       </body>
     </html>

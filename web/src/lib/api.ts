@@ -4,6 +4,9 @@ export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 const API_READ_TIMEOUT_MS = 3500;
+const PAPER_CACHE_TTL_MS = 30 * 60 * 1000;
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const SAVED_PAPER_IDS_KEY = "veros:saved-paper-ids:v1";
 
 function withReadTimeout(init: RequestInit = {}): RequestInit {
   if (init.signal) return init;
@@ -71,6 +74,55 @@ export const PaperDetailSchema = z.object({
 
 export type PaperDetailDTO = z.infer<typeof PaperDetailSchema>;
 
+type CacheEntry<T> = {
+  expiresAt: number;
+  value: T;
+};
+
+function isBrowser() {
+  return typeof window !== "undefined";
+}
+
+function getSessionValue<T>(key: string, schema: z.ZodType<T>): T | null {
+  if (!isBrowser()) return null;
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = z.object({ expiresAt: z.number(), value: schema }).parse(JSON.parse(raw));
+    if (parsed.expiresAt <= Date.now()) {
+      window.sessionStorage.removeItem(key);
+      return null;
+    }
+    return parsed.value;
+  } catch {
+    return null;
+  }
+}
+
+function setSessionValue<T>(key: string, value: T, ttlMs: number) {
+  if (!isBrowser()) return;
+  const entry: CacheEntry<T> = { expiresAt: Date.now() + ttlMs, value };
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify(entry));
+  } catch {
+    // Ignore quota/security errors; caching is only an optimization.
+  }
+}
+
+function paperCacheKey(paperId: string) {
+  return `veros:paper:${encodeURIComponent(paperId)}:v1`;
+}
+
+function searchCacheKey(
+  query: string,
+  limit: number,
+  offset: number,
+  mode: "auto" | "topic" | "specific",
+  sort: SearchSortKey,
+) {
+  return `veros:search:${encodeURIComponent(JSON.stringify({ query, limit, offset, mode, sort }))}:v1`;
+}
+
 export const PaperStatusSchema = z.object({
   paper_id: z.string(),
   ingest: z.enum(["queued", "ready", "failed"]),
@@ -95,6 +147,30 @@ export async function fetchPaper(
     throw new Error(`API error ${res.status} fetching ${paperId}`);
   }
   return PaperDetailSchema.parse(await res.json());
+}
+
+export function getCachedPaper(paperId: string): PaperDetailDTO | null {
+  return getSessionValue(paperCacheKey(paperId), PaperDetailSchema);
+}
+
+export function rememberPaper(paper: PaperDetailDTO) {
+  setSessionValue(paperCacheKey(paper.id), paper, PAPER_CACHE_TTL_MS);
+}
+
+export async function fetchPaperClient(
+  paperId: string,
+  opts: { refresh?: boolean; signal?: AbortSignal } = {},
+): Promise<PaperDetailDTO | "queued" | "failed" | null> {
+  if (!opts.refresh) {
+    const cached = getCachedPaper(paperId);
+    if (cached) return cached;
+  }
+
+  const result = await fetchPaper(paperId, opts.signal ? { signal: opts.signal } : undefined);
+  if (result && result !== "queued" && result !== "failed") {
+    rememberPaper(result);
+  }
+  return result;
 }
 
 export async function fetchPaperStatus(
@@ -156,6 +232,21 @@ const SearchPageSchema = z.object({
 
 export type SearchPageDTO = z.infer<typeof SearchPageSchema>;
 
+export function rememberSearchPage(
+  query: string,
+  page: SearchPageDTO,
+  limit = 20,
+  offset = 0,
+  mode: "auto" | "topic" | "specific" = "auto",
+  sort: SearchSortKey = "score",
+) {
+  setSessionValue(
+    searchCacheKey(query, limit, offset, mode, sort),
+    page,
+    SEARCH_CACHE_TTL_MS,
+  );
+}
+
 export async function fetchSearch(
   query: string,
   limit = 20,
@@ -186,6 +277,7 @@ export async function fetchSearchPage(
   offset = 0,
   mode: "auto" | "topic" | "specific" = "auto",
   sort: SearchSortKey = "score",
+  init?: RequestInit,
 ): Promise<SearchPageDTO> {
   const params = new URLSearchParams({
     q: query,
@@ -196,12 +288,29 @@ export async function fetchSearchPage(
   });
   const res = await fetch(
     `${API_BASE_URL}/search/page?${params}`,
-    withReadTimeout({ cache: "no-store" }),
+    withReadTimeout({ cache: "no-store", ...init }),
   );
   if (!res.ok) {
     throw new Error(`Search API error ${res.status}`);
   }
   return SearchPageSchema.parse(await res.json());
+}
+
+export async function fetchSearchPageClient(
+  query: string,
+  limit = 20,
+  offset = 0,
+  mode: "auto" | "topic" | "specific" = "auto",
+  sort: SearchSortKey = "score",
+  signal?: AbortSignal,
+): Promise<SearchPageDTO> {
+  const key = searchCacheKey(query, limit, offset, mode, sort);
+  const cached = getSessionValue(key, SearchPageSchema);
+  if (cached) return cached;
+
+  const page = await fetchSearchPage(query, limit, offset, mode, sort, signal ? { signal } : undefined);
+  setSessionValue(key, page, SEARCH_CACHE_TTL_MS);
+  return page;
 }
 
 /** Live (debounced) topic-mode fuzzy search; pass an AbortSignal to cancel in-flight calls. */
@@ -219,6 +328,15 @@ export async function fetchSearchLive(
     throw new Error(`Search API error ${res.status}`);
   }
   return z.array(PaperOutSchema).parse(await res.json());
+}
+
+export async function fetchSearchLiveClient(
+  query: string,
+  sort: SearchSortKey = "score",
+  signal?: AbortSignal,
+): Promise<PaperOutDTO[]> {
+  const page = await fetchSearchPageClient(query, 20, 0, "topic", sort, signal);
+  return page.results;
 }
 
 const LookupCandidateSchema = z.object({
@@ -250,7 +368,16 @@ export async function lookupSearch(query: string): Promise<SearchLookupResponse>
   if (!res.ok) {
     throw new Error(`Search lookup API error ${res.status}`);
   }
-  return SearchLookupResponseSchema.parse(await res.json());
+  const response = SearchLookupResponseSchema.parse(await res.json());
+  rememberSearchPage(
+    query,
+    { results: response.results, total: response.results.length },
+    20,
+    0,
+    response.intent === "specific" ? "specific" : "topic",
+    "score",
+  );
+  return response;
 }
 
 export async function fetchSearchCount(query: string): Promise<number> {
@@ -277,6 +404,8 @@ export async function fetchSavedStatus(
   paperId: string,
   init?: RequestInit,
 ): Promise<boolean> {
+  if (isBrowser()) return getLocalSavedPaperIds().includes(paperId);
+
   const res = await fetch(
     `${API_BASE_URL}/saved/${encodeURIComponent(paperId)}`,
     withReadTimeout({ cache: "no-store", ...init }),
@@ -286,7 +415,37 @@ export async function fetchSavedStatus(
   return data.saved;
 }
 
+export function getLocalSavedPaperIds(): string[] {
+  if (!isBrowser()) return [];
+  try {
+    const parsed = z.array(z.string()).parse(
+      JSON.parse(window.localStorage.getItem(SAVED_PAPER_IDS_KEY) ?? "[]"),
+    );
+    return [...new Set(parsed)];
+  } catch {
+    return [];
+  }
+}
+
+function setLocalSavedPaperIds(ids: string[]) {
+  if (!isBrowser()) return;
+  try {
+    window.localStorage.setItem(SAVED_PAPER_IDS_KEY, JSON.stringify([...new Set(ids)]));
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
+export async function fetchSavedStatusClient(paperId: string): Promise<boolean> {
+  return getLocalSavedPaperIds().includes(paperId);
+}
+
 export async function savePaper(paperId: string): Promise<void> {
+  if (isBrowser()) {
+    setLocalSavedPaperIds([paperId, ...getLocalSavedPaperIds()]);
+    return;
+  }
+
   const res = await fetch(`${API_BASE_URL}/saved`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -296,6 +455,11 @@ export async function savePaper(paperId: string): Promise<void> {
 }
 
 export async function unsavePaper(paperId: string): Promise<void> {
+  if (isBrowser()) {
+    setLocalSavedPaperIds(getLocalSavedPaperIds().filter((id) => id !== paperId));
+    return;
+  }
+
   const res = await fetch(`${API_BASE_URL}/saved/${encodeURIComponent(paperId)}`, {
     method: "DELETE",
   });

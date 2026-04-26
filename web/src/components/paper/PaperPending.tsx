@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { fetchPaper, fetchPaperStatus, PaperDetailDTO } from "@/lib/api";
+import { fetchPaperClient, fetchPaperStatus, PaperDetailDTO } from "@/lib/api";
 import { adaptPaperDetail } from "@/lib/adapt";
+import { upsertLocalPaper } from "@/lib/localPapers";
 import { PaperView } from "./PaperView";
 
 type Phase = "ingesting" | "analyzing" | "loading";
@@ -14,7 +15,7 @@ const PHASE_LABELS: Record<Phase, string> = {
   loading: "Loading paper…",
 };
 
-const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 5000;
 // 90s is enough for an OpenReview fetch + scoring + LLM analyze under normal
 // load. If we're still stuck after that, the worker has almost certainly
 // failed (id not found on either v1/v2, auth-gated venue, LLM down, etc.).
@@ -46,13 +47,14 @@ export function PaperPending({ paperId }: { paperId: string }) {
 
         if (status.analysis === "ready" || status.ingest === "ready") {
           setPhase("loading");
-          const result = await fetchPaper(paperId);
+          const result = await fetchPaperClient(paperId, { refresh: true });
           if (!cancelled && result && result !== "queued" && result !== "failed") {
             toast.success(
               status.analysis === "ready"
                 ? "Paper analyzed — AI insights ready"
                 : "Paper ingested — score ready",
             );
+            upsertLocalPaper(result);
             setDto(result);
             return;
           }

@@ -13,6 +13,8 @@ def test_create_app_registers_core_routes() -> None:
 
     assert app.title == "Veros API"
     assert "/api/v1/health" in paths
+    assert "/api/v1/corpus/papers" in paths
+    assert "/api/v1/corpus/version" in paths
     assert "/api/v1/search" in paths
     assert "/api/v1/papers/{paper_id}" in paths
     assert "/api/v1/saved" in paths
