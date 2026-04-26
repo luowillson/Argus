@@ -34,6 +34,18 @@ const DEBOUNCE_MS = 450;
 const PAGE_SIZE = 20;
 const MIN_LIVE_QUERY_CHARS = 3;
 
+function liveSearchHref(query: string, sort: SearchSortKey) {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (sort !== (query ? "relevance" : "score")) params.set("sort", sort);
+  const qs = params.toString();
+  return qs ? `/search?${qs}` : "/search";
+}
+
+function replaceBrowserUrl(href: string) {
+  window.history.replaceState(window.history.state, "", href);
+}
+
 export function SearchView({
   initialQuery,
   initialResults,
@@ -120,6 +132,7 @@ export function SearchView({
         setFocusId(null);
         setPendingTitle(null);
         setNotFound(false);
+        replaceBrowserUrl(liveSearchHref(trimmed, activeSort));
       } catch (err) {
         if ((err as { name?: string })?.name !== "AbortError") {
           // swallow other errors silently — keep prior results
