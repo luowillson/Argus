@@ -13,6 +13,11 @@ export function PaperHeader({
   paper: Paper;
   initialSaved?: boolean;
 }) {
+  const metadata = [
+    paper.venue,
+    paper.acceptance ? `accepted (${paper.acceptance})` : null,
+  ].filter(Boolean);
+
   return (
     <header>
       <div className="flex items-center justify-between font-sans text-[12px] text-muted">
@@ -40,8 +45,7 @@ export function PaperHeader({
         {paper.authors}
       </div>
       <div className="mt-1.5 font-mono text-[12px] text-muted">
-        {paper.venue} · {paper.citations.toLocaleString()} citations
-        {paper.acceptance ? ` · accepted (${paper.acceptance})` : ""}
+        {metadata.join(" · ")}
       </div>
     </header>
   );
