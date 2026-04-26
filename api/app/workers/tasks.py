@@ -26,6 +26,8 @@ def ingest_paper_task(self, forum_id: str) -> dict:  # type: ignore[override]
         mark_ingest_failed,
     )
 
+    logger.info("ingest_paper_task: starting forum=%r retry=%d", forum_id, self.request.retries)
+
     engine = get_engine()
     with Session(engine) as db:
         if get_ingest_failure(db, forum_id) is not None:
@@ -56,10 +58,22 @@ def ingest_paper_task(self, forum_id: str) -> dict:  # type: ignore[override]
                     attempts,
                 )
                 raise
-            logger.exception("ingest_paper_task failed for %s", forum_id)
+            logger.exception(
+                "ingest_paper_task: unexpected error for forum=%r (retry %d/%d)",
+                forum_id,
+                self.request.retries,
+                self.max_retries,
+            )
             raise self.retry(exc=exc) from exc
         clear_ingest_failure(db, forum_id)
 
+    logger.info(
+        "ingest_paper_task: done forum=%r reviews=%s score=%s analyze=%s",
+        forum_id,
+        result.get("review_count"),
+        result.get("score"),
+        result.get("analyze_status"),
+    )
     # Chain embedding step after successful ingest (best-effort; failures don't block).
     embed_paper_task.delay(forum_id)
     return result
@@ -76,11 +90,13 @@ def embed_paper_task(self, paper_id: str) -> None:  # type: ignore[override]
     from app.db.models import AIInsight, Paper, PaperEmbedding
     from app.services.embeddings.factory import get_embedding_provider
 
+    logger.info("embed_paper_task: starting paper=%r retry=%d", paper_id, self.request.retries)
+
     engine = get_engine()
     with Session(engine) as db:
         paper = db.get(Paper, paper_id)
         if paper is None:
-            logger.warning("embed_paper_task: paper %s not found, skipping", paper_id)
+            logger.warning("embed_paper_task: paper %r not found, skipping", paper_id)
             return
 
         insight = db.get(AIInsight, paper_id)
@@ -91,7 +107,12 @@ def embed_paper_task(self, paper_id: str) -> None:  # type: ignore[override]
             provider = get_embedding_provider()
             embedding = provider.encode([text])[0]
         except Exception as exc:
-            logger.exception("embed_paper_task: encoding failed for %s", paper_id)
+            logger.exception(
+                "embed_paper_task: encoding failed paper=%r (retry %d/%d)",
+                paper_id,
+                self.request.retries,
+                self.max_retries,
+            )
             raise self.retry(exc=exc) from exc
 
         settings = get_settings()
@@ -112,4 +133,4 @@ def embed_paper_task(self, paper_id: str) -> None:  # type: ignore[override]
         db.exec(stmt)
         db.commit()
 
-    logger.info("embed_paper_task: embedded paper %s", paper_id)
+    logger.info("embed_paper_task: done paper=%r", paper_id)

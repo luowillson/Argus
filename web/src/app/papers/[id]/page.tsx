@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { TopNav } from "@/components/nav/TopNav";
 import { PaperView } from "@/components/paper/PaperView";
 import { PaperPending } from "@/components/paper/PaperPending";
-import { fetchPaper } from "@/lib/api";
+import { fetchPaper, fetchSaved } from "@/lib/api";
 import { adaptPaperDetail } from "@/lib/adapt";
 import { VEROS_PAPERS } from "@/lib/mock-papers";
 
@@ -13,9 +13,15 @@ export default async function PaperPage({
 }) {
   const { id } = await params;
   let result: Awaited<ReturnType<typeof fetchPaper>> = null;
+  let initialSaved = false;
 
   try {
-    result = await fetchPaper(id);
+    const [paperResult, savedList] = await Promise.all([
+      fetchPaper(id),
+      fetchSaved().catch(() => []),
+    ]);
+    result = paperResult;
+    initialSaved = savedList.some((dto) => dto.id === id);
   } catch {
     // API unreachable — fall through to mock data so the page still renders.
   }
@@ -34,7 +40,7 @@ export default async function PaperPage({
     return (
       <div className="min-h-screen bg-paper text-ink">
         <TopNav />
-        <PaperView paper={paper} aiReady={result.status === "ready"} />
+        <PaperView paper={paper} aiReady={result.status === "ready"} initialSaved={initialSaved} />
       </div>
     );
   }
@@ -45,7 +51,7 @@ export default async function PaperPage({
   return (
     <div className="min-h-screen bg-paper text-ink">
       <TopNav />
-      <PaperView paper={mock} aiReady={true} />
+      <PaperView paper={mock} aiReady={true} initialSaved={false} />
     </div>
   );
 }

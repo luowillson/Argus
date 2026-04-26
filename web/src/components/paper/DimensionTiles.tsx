@@ -3,6 +3,7 @@ type Props = {
   technical: number | null;
   clarity: number | null;
   impact: number | null;
+  pending?: boolean;
   className?: string;
 };
 
@@ -18,6 +19,7 @@ export function DimensionTiles({
   technical,
   clarity,
   impact,
+  pending = false,
 }: Props) {
   const values = { novelty, technical, clarity, impact } as const;
   return (
@@ -30,7 +32,7 @@ export function DimensionTiles({
               {label}
             </div>
             <div className="mt-1.5 text-[34px] font-medium leading-none tracking-[-0.025em] tabular-nums text-ink">
-              {v === null ? (
+              {pending || v === null ? (
                 <span className="text-muted/50">—</span>
               ) : (
                 <>

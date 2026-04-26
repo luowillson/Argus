@@ -14,12 +14,22 @@ from app.services.search import (
     SearchMode,
     best_title_match_id,
     classify_intent,
+    count_papers,
     search_papers,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+@router.get("/count")
+def search_count(
+    db: DbSession,
+    q: str = Query(default="", description="Search query"),
+) -> dict[str, int]:
+    """Return total result count for a query — used by the frontend for pagination."""
+    return {"total": count_papers(db, q)}
 
 
 @router.get("", response_model=list[PaperOut])

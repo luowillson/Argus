@@ -13,7 +13,7 @@ import logging
 import re
 from typing import Literal, cast
 
-from sqlalchemy import text as sa_text
+from sqlalchemy import func, text as sa_text
 from sqlmodel import Session, select
 
 from app.config import get_settings
@@ -282,6 +282,33 @@ def _relevance_score(db: Session, q: str, paper_ids: list[str]) -> dict[str, flo
     return {str(r[0]): float(r[1] or 0.0) + (0.25 if r[2] else 0.0) for r in rows}
 
 
+def count_papers(db: Session, query: str) -> int:
+    """Return total result count for the given query (used for pagination)."""
+    q = query.strip()
+    if not q:
+        return db.exec(select(func.count(Paper.id))).one()  # type: ignore[return-value]
+
+    # Collect all candidates (no slice) and return unique count.
+    candidate_ids: list[str] = list(_fuzzy_text_candidate_ids(db, q))
+    try:
+        if _has_embeddings(db):
+            from app.services.embeddings.factory import get_embedding_provider
+
+            provider = get_embedding_provider()
+            embedding = provider.encode([q])[0]
+            vec_str = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
+            sql = sa_text(
+                "SELECT paper_id FROM paper_embeddings "
+                "ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :n"
+            )
+            rows = db.execute(sql, {"vec": vec_str, "n": _CANDIDATE_POOL}).fetchall()
+            candidate_ids.extend(r[0] for r in rows)
+    except Exception:
+        pass
+
+    return len(set(candidate_ids))
+
+
 def search_papers(
     db: Session,
     query: str,
@@ -359,4 +386,8 @@ def search_papers(
     if candidate_ids_are_page:
         return results
 
+    # Empty-query browse: DB already applied OFFSET/LIMIT, so return as-is.
+    # Non-empty query: candidates were collected in bulk; slice here for the page.
+    if not q:
+        return results
     return results[offset : offset + limit]

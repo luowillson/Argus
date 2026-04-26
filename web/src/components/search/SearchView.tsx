@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { SearchHeaderBar } from "@/components/nav/SearchHeaderBar";
 import { ResultRow } from "@/components/search/ResultRow";
 import { PaperPendingCard } from "@/components/search/PaperPendingCard";
+import { PaginationBar } from "@/components/search/PaginationBar";
 import { fetchSearchLive } from "@/lib/api";
 import { adaptPaperOut } from "@/lib/adapt";
 import { submitSearch } from "@/lib/searchSubmit";
@@ -16,6 +17,9 @@ type Props = {
   initialFocusId?: string;
   initialNotFound?: boolean;
   initialPendingTitle?: string;
+  initialTotalCount?: number;
+  currentPage?: number;
+  totalPages?: number;
 };
 
 const DEBOUNCE_MS = 250;
@@ -26,6 +30,9 @@ export function SearchView({
   initialFocusId,
   initialNotFound = false,
   initialPendingTitle,
+  initialTotalCount,
+  currentPage = 1,
+  totalPages = 1,
 }: Props) {
   const router = useRouter();
 
@@ -92,7 +99,8 @@ export function SearchView({
   })();
 
   const showPendingCard = focusId && pendingTitle && !results.some((p) => p.id === focusId);
-  const totalCount = orderedResults.length + (showPendingCard ? 1 : 0);
+  const totalCount =
+    initialTotalCount ?? orderedResults.length + (showPendingCard ? 1 : 0);
   const sortLabel =
     sortMode === "relevance" ? "sorted by relevance" : "sorted by Veros score";
 
@@ -159,6 +167,13 @@ export function SearchView({
                 isFirst={!showPendingCard && i === 0}
               />
             ))}
+            {!focusId && (
+              <PaginationBar
+                query={initialQuery}
+                currentPage={currentPage}
+                totalPages={totalPages}
+              />
+            )}
           </div>
         )}
       </div>

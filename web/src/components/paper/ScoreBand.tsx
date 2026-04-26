@@ -13,9 +13,10 @@ const STRENGTH_COLOR = {
 
 type Props = {
   paper: Paper;
+  aiReady?: boolean;
 };
 
-export function ScoreBand({ paper }: Props) {
+export function ScoreBand({ paper, aiReady = true }: Props) {
   const score = paper.score;
 
   return (
@@ -54,6 +55,7 @@ export function ScoreBand({ paper }: Props) {
         technical={paper.technical}
         clarity={paper.clarity}
         impact={paper.impact}
+        pending={!aiReady}
       />
 
       <div className="flex flex-col items-end gap-2.5 text-right">

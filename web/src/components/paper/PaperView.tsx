@@ -8,14 +8,16 @@ import { ReviewerVoices } from "./ReviewerVoices";
 export function PaperView({
   paper,
   aiReady,
+  initialSaved = false,
 }: {
   paper: Paper;
   aiReady: boolean;
+  initialSaved?: boolean;
 }) {
   return (
     <article className="mx-auto max-w-[1100px] px-24 pt-9 pb-16">
-      <PaperHeader paper={paper} />
-      <ScoreBand paper={paper} />
+      <PaperHeader paper={paper} initialSaved={initialSaved} />
+      <ScoreBand paper={paper} aiReady={aiReady} />
       <TldrSection
         paperId={paper.id}
         tldr={paper.tldr}
