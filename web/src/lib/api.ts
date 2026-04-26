@@ -134,13 +134,20 @@ export const PaperOutSchema = z.object({
 });
 
 export type PaperOutDTO = z.infer<typeof PaperOutSchema>;
+export type SearchSortKey = "score" | "novelty" | "technical" | "clarity" | "impact";
 
 export async function fetchSearch(
   query: string,
   limit = 20,
   offset = 0,
+  sort: SearchSortKey = "score",
 ): Promise<PaperOutDTO[]> {
-  const params = new URLSearchParams({ q: query, limit: String(limit), offset: String(offset) });
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(limit),
+    offset: String(offset),
+    sort,
+  });
   const res = await fetch(`${API_BASE_URL}/search?${params}`, { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Search API error ${res.status}`);

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.db.models import Paper, Review
 from app.services.scoring import compute_and_store_score
@@ -164,6 +164,7 @@ def import_neurips_2025_jsonl(
     *,
     limit: int | None = None,
     skip_existing: bool = False,
+    progress: bool = True,
 ) -> NeuripsImportResult:
     source_path = Path(source)
     seen_rows = 0
@@ -171,6 +172,16 @@ def import_neurips_2025_jsonl(
     skipped_existing = 0
     imported_reviews = 0
     scored_papers = 0
+    existing_paper_ids = (
+        set(db.exec(select(Paper.id)).all())
+        if skip_existing
+        else set()
+    )
+    if progress and skip_existing:
+        print(
+            f"Loaded {len(existing_paper_ids)} existing paper id(s) for skip checks.",
+            flush=True,
+        )
 
     for row in _iter_jsonl(source_path):
         if limit is not None and imported_papers >= limit:
@@ -185,20 +196,37 @@ def import_neurips_2025_jsonl(
             raw_reviews = []
 
         paper_id = str(raw_paper["id"])
-        if skip_existing and db.get(Paper, paper_id) is not None:
+        title = str(raw_paper.get("title") or paper_id)
+        if paper_id in existing_paper_ids:
             skipped_existing += 1
+            if progress:
+                print(
+                    f"[{seen_rows}] skipped existing {paper_id}: {title} "
+                    f"(skipped={skipped_existing})",
+                    flush=True,
+                )
             continue
 
         _upsert_paper(db, raw_paper)
+        paper_review_count = 0
         for raw_review in raw_reviews:
             if isinstance(raw_review, dict) and "id" in raw_review:
                 _upsert_review(db, paper_id, raw_review)
                 imported_reviews += 1
+                paper_review_count += 1
         db.commit()
 
         if compute_and_store_score(db, paper_id) is not None:
             scored_papers += 1
         imported_papers += 1
+        existing_paper_ids.add(paper_id)
+        if progress:
+            print(
+                f"[{seen_rows}] imported {paper_id}: {title} "
+                f"({paper_review_count} reviews, imported={imported_papers}, "
+                f"scored={scored_papers})",
+                flush=True,
+            )
 
     return NeuripsImportResult(
         source=str(source_path),

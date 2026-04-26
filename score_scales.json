@@ -1,5 +1,27 @@
 {
   "venues": {
+    "ICLR.cc/2025/Conference": {
+      "confidence": {
+        "max": 5.0,
+        "min": 1.0
+      },
+      "contribution": {
+        "max": 4.0,
+        "min": 1.0
+      },
+      "presentation": {
+        "max": 4.0,
+        "min": 1.0
+      },
+      "rating": {
+        "max": 10.0,
+        "min": 1.0
+      },
+      "soundness": {
+        "max": 4.0,
+        "min": 1.0
+      }
+    },
     "NeurIPS.cc/2025/Conference": {
       "clarity": {
         "max": 4.0,
