@@ -1,14 +1,16 @@
 """Full-text + semantic search over ingested papers.
 
-Strategy: run a pg_trgm ILIKE text match on title/abstract in parallel with
-a pgvector cosine nearest-neighbour lookup on paper_embeddings (when the
-embedding provider is available). De-duplicate by paper_id, fetch scores
-and AI insights for the candidate set, sort by Veros score descending.
+Strategy: combine (1) substring ILIKE with escaped wildcards, (2) pg_trgm
+``word_similarity`` on title/abstract for fuzzy matching, (3) optional
+per-token fuzzy ORs for multi-word queries, and (4) pgvector cosine
+nearest-neighbour on query embeddings when available. De-duplicate by
+paper_id, fetch scores and AI insights, sort by Veros score descending.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import cast
 
 from sqlalchemy import text as sa_text
@@ -20,7 +22,110 @@ from app.services.dimensions import standardized_dimensions
 
 logger = logging.getLogger(__name__)
 
-_CANDIDATE_POOL = 40  # max IDs to collect before re-ranking by score
+_CANDIDATE_POOL = 50  # max IDs per channel before re-ranking by score
+_FUZZY_WORD_SIM_THRESHOLD = 0.16
+_MIN_TOKEN_LEN = 3
+_MAX_TOKENS = 5
+
+
+def _escape_ilike(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _fuzzy_text_candidate_ids(db: Session, q: str) -> list[str]:
+    """ILIKE substring + word_similarity; extra per-token rows for multi-word queries."""
+    qn = q.strip()
+    if not qn:
+        return []
+
+    like = f"%{_escape_ilike(qn)}%"
+    out: list[str] = []
+    seen: set[str] = set()
+
+    sql = sa_text(
+        """
+        SELECT id FROM papers
+        WHERE
+          title ILIKE :like ESCAPE '\\'
+          OR COALESCE(abstract, '') ILIKE :like ESCAPE '\\'
+          OR word_similarity(lower(:qn), lower(title)) > :w_th
+          OR word_similarity(
+            lower(:qn), lower(COALESCE(abstract, ''))
+          ) > :w_th
+        ORDER BY
+          (
+            CASE
+              WHEN title ILIKE :like ESCAPE '\\'
+                OR COALESCE(abstract, '') ILIKE :like ESCAPE '\\'
+              THEN 1
+              ELSE 0
+            END
+          ) DESC,
+          GREATEST(
+            word_similarity(lower(:qn), lower(title)),
+            word_similarity(
+              lower(:qn), lower(COALESCE(abstract, ''))
+            )
+          ) DESC
+        LIMIT :lim
+        """
+    )
+    rows = db.execute(
+        sql,
+        {
+            "like": like,
+            "qn": qn,
+            "w_th": _FUZZY_WORD_SIM_THRESHOLD,
+            "lim": _CANDIDATE_POOL,
+        },
+    ).fetchall()
+    for r in rows:
+        if r[0] not in seen:
+            seen.add(r[0])
+            out.append(r[0])
+
+    tokens = [
+        t
+        for t in re.split(r"\s+", qn)
+        if len(t) >= _MIN_TOKEN_LEN
+    ][: _MAX_TOKENS]
+    if len(tokens) > 1:
+        tsql = sa_text(
+            """
+            SELECT id FROM papers
+            WHERE
+              word_similarity(lower(:tok), lower(title)) > :w_th
+              OR word_similarity(
+                lower(:tok), lower(COALESCE(abstract, ''))
+              ) > :w_th
+            ORDER BY GREATEST(
+              word_similarity(lower(:tok), lower(title)),
+              word_similarity(
+                lower(:tok), lower(COALESCE(abstract, ''))
+              )
+            ) DESC
+            LIMIT :lim
+            """
+        )
+        for tok in tokens:
+            if len(out) >= _CANDIDATE_POOL:
+                break
+            rows2 = db.execute(
+                tsql,
+                {
+                    "tok": tok,
+                    "w_th": _FUZZY_WORD_SIM_THRESHOLD,
+                    "lim": min(20, _CANDIDATE_POOL),
+                },
+            ).fetchall()
+            for r in rows2:
+                if r[0] not in seen:
+                    seen.add(r[0])
+                    out.append(r[0])
+                    if len(out) >= _CANDIDATE_POOL:
+                        break
+
+    return out
 
 
 def _has_embeddings(db: Session) -> bool:
@@ -73,25 +178,13 @@ def search_papers(
     candidate_ids: list[str] = []
 
     if not q:
-        # Empty query → most-recently ingested papers.
         rows = db.exec(
             select(Paper.id).order_by(Paper.ingested_at.desc()).limit(_CANDIDATE_POOL)  # type: ignore[attr-defined]
         ).all()
         candidate_ids = list(rows)
     else:
-        # 1. Trigram text match on title and abstract.
-        like = f"%{q}%"
-        text_rows = db.exec(
-            select(Paper.id)
-            .where(
-                Paper.title.ilike(like)  # type: ignore[attr-defined]
-                | Paper.abstract.ilike(like)  # type: ignore[attr-defined]
-            )
-            .limit(_CANDIDATE_POOL)
-        ).all()
-        candidate_ids.extend(text_rows)
+        candidate_ids.extend(_fuzzy_text_candidate_ids(db, q))
 
-        # 2. Semantic vector search (best-effort — skip if provider unavailable).
         try:
             if not _has_embeddings(db):
                 raise RuntimeError("no paper embeddings indexed")
@@ -110,7 +203,6 @@ def search_papers(
         except Exception:
             logger.debug("Vector search skipped (provider unavailable or no embeddings).")
 
-    # 3. Deduplicate, preserving order (text matches first).
     seen: set[str] = set()
     unique_ids: list[str] = []
     for pid in candidate_ids:
@@ -121,7 +213,6 @@ def search_papers(
     if not unique_ids:
         return []
 
-    # 4. Bulk-fetch papers + scores + insights in three queries.
     papers = {
         p.id: p
         for p in db.exec(select(Paper).where(Paper.id.in_(unique_ids))).all()
@@ -139,7 +230,6 @@ def search_papers(
         ).all()
     }
 
-    # 5. Build results and sort by Veros score descending.
     results = [
         build_paper_out(papers[pid], scores.get(pid), insights.get(pid))
         for pid in unique_ids

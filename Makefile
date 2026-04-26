@@ -1,4 +1,4 @@
-.PHONY: infra-up redis-up infra-down db-migrate db-current db-history api-dev worker web-dev
+.PHONY: infra-up redis-up infra-down db-migrate db-current db-history db-merge-to-shared api-dev worker web-dev
 
 infra-up:
 	docker compose up -d
@@ -17,6 +17,9 @@ db-current:
 
 db-history:
 	cd api && uv run alembic history
+
+db-merge-to-shared:
+	cd api && uv run python scripts/merge_db_to_shared.py
 
 api-dev:
 	cd api && uv run uvicorn app.main:app --reload
