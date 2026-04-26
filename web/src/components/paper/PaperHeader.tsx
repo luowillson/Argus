@@ -6,7 +6,13 @@ function openreviewUrl(id: string) {
   return `https://openreview.net/forum?id=${encodeURIComponent(id)}`;
 }
 
-export function PaperHeader({ paper }: { paper: Paper }) {
+export function PaperHeader({
+  paper,
+  initialSaved = false,
+}: {
+  paper: Paper;
+  initialSaved?: boolean;
+}) {
   return (
     <header>
       <div className="flex items-center justify-between font-sans text-[12px] text-muted">
@@ -24,7 +30,7 @@ export function PaperHeader({ paper }: { paper: Paper }) {
             openreview:{paper.id}
           </a>
         </div>
-        <SaveButton paperId={paper.id} />
+        <SaveButton paperId={paper.id} initialSaved={initialSaved} />
       </div>
 
       <h1 className="mt-5 max-w-[880px] text-[38px] font-medium leading-[1.15] tracking-[-0.013em]">

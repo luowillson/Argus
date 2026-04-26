@@ -25,12 +25,14 @@ class OpenAICompatibleProvider(LLMProvider):
         base_url: str,
         model: str,
         name: str,
+        json_mode: bool = True,
     ) -> None:
         if not api_key:
             raise ValueError(f"{name}: api_key is required")
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
         self.name = name
+        self._json_mode = json_mode
 
     def complete_json(
         self,
@@ -48,8 +50,9 @@ class OpenAICompatibleProvider(LLMProvider):
             ],
             "temperature": temperature,
             "max_tokens": max_output_tokens,
-            "response_format": {"type": "json_object"},
         }
+        if self._json_mode:
+            request["response_format"] = {"type": "json_object"}
         completion = self._client.chat.completions.create(**request)
 
         choice = completion.choices[0]

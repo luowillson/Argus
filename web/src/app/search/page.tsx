@@ -1,7 +1,5 @@
-import { SearchHeaderBar } from "@/components/nav/SearchHeaderBar";
-import { ResultsGrid } from "@/components/search/ResultsGrid";
-import { SortControl } from "@/components/search/SortControl";
-import { fetchSearch, type SearchSortKey } from "@/lib/api";
+import { SearchView } from "@/components/search/SearchView";
+import { fetchSearch, fetchSearchCount, type SearchSortKey } from "@/lib/api";
 import { adaptPaperOut } from "@/lib/adapt";
 import { VEROS_PAPERS } from "@/lib/mock-papers";
 import type { Paper } from "@/lib/types";
@@ -26,22 +24,48 @@ function parseSort(value: string | undefined): SearchSortKey {
   return "score";
 }
 
+const PAGE_SIZE = 20;
+
 export default async function SearchPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; sort?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    sort?: string;
+    page?: string;
+    focus?: string;
+    notFound?: string;
+    pending?: string;
+  }>;
 }) {
-  const { q = "", sort } = await searchParams;
+  const {
+    q = "",
+    sort,
+    page: pageParam = "1",
+    focus,
+    notFound,
+    pending,
+  } = await searchParams;
   const query = q.trim();
   const activeSort = parseSort(sort);
+  const currentPage = Math.max(1, parseInt(pageParam, 10) || 1);
+  const offset = (currentPage - 1) * PAGE_SIZE;
+  const mode = focus ? "specific" : "topic";
 
   let results: Paper[] = [];
+  let totalPages = 1;
+  let totalCount = 0;
   let fromApi = false;
 
   try {
-    const dtos = await fetchSearch(query, 20, 0, activeSort);
-    if (dtos.length > 0) {
+    const [dtos, total] = await Promise.all([
+      fetchSearch(query, PAGE_SIZE, offset, mode, activeSort),
+      fetchSearchCount(query),
+    ]);
+    if (total > 0 || dtos.length > 0) {
       results = dtos.map(adaptPaperOut);
+      totalCount = total;
+      totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
       fromApi = true;
     }
   } catch {
@@ -49,47 +73,34 @@ export default async function SearchPage({
   }
 
   if (!fromApi) {
-    const filtered = query
+    const all = query
       ? VEROS_PAPERS.filter((p) => {
           const hay = `${p.title} ${p.authors} ${p.tldr} ${p.venue}`.toLowerCase();
           return hay.includes(query.toLowerCase());
         })
       : VEROS_PAPERS;
-    results = [...filtered].sort((a, b) => {
+    const sorted = [...all].sort((a, b) => {
       const left = activeSort === "score" ? (a.score ?? 0) : a[activeSort];
       const right = activeSort === "score" ? (b.score ?? 0) : b[activeSort];
       return right - left || (b.score ?? 0) - (a.score ?? 0);
     });
+    totalCount = sorted.length;
+    totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+    results = sorted.slice(offset, offset + PAGE_SIZE);
   }
 
   return (
-    <div className="min-h-screen bg-paper">
-      <SearchHeaderBar initialQuery={query} />
-
-      <div className="px-16 pt-9 pb-1.5">
-        <h1 className="text-[26px] font-medium tracking-[-0.011em]">
-          {query ? (
-            <>
-              Results for{" "}
-              <em className="font-serif italic text-burgundy">
-                &ldquo;{query}&rdquo;
-              </em>
-            </>
-          ) : (
-            <>All papers</>
-          )}
-        </h1>
-        <div className="mt-1.5 font-sans text-[13px] text-muted">
-          {results.length.toLocaleString()} papers · sorted by {SORT_LABELS[activeSort]}
-        </div>
-        <div className="mt-4">
-          <SortControl query={query} activeSort={activeSort} />
-        </div>
-      </div>
-
-      <div className="px-16 pb-16">
-        <ResultsGrid papers={results} />
-      </div>
-    </div>
+    <SearchView
+      initialQuery={query}
+      initialResults={results}
+      initialFocusId={focus}
+      initialNotFound={notFound === "1"}
+      initialPendingTitle={pending}
+      initialTotalCount={totalCount}
+      currentPage={currentPage}
+      totalPages={totalPages}
+      activeSort={activeSort}
+      sortLabel={SORT_LABELS[activeSort]}
+    />
   );
 }

@@ -13,14 +13,17 @@ import logging
 import re
 from typing import Literal, cast
 
-from sqlalchemy import text as sa_text
+from sqlalchemy import func, text as sa_text
 from sqlmodel import Session, select
 
+from app.config import get_settings
 from app.db.models import AIInsight, Paper, VerosScore
 from app.schemas.paper import ConsensusStrength, PaperOut, Verdict
 from app.services.dimensions import standardized_dimensions
 
 logger = logging.getLogger(__name__)
+
+SearchMode = Literal["auto", "topic", "specific"]
 
 _CANDIDATE_POOL = 50  # max IDs per channel before re-ranking by score
 _FUZZY_WORD_SIM_THRESHOLD = 0.16
@@ -136,6 +139,76 @@ def _fuzzy_text_candidate_ids(db: Session, q: str) -> list[str]:
     return out
 
 
+def top_title_similarity(db: Session, q: str) -> float:
+    """Return the max word_similarity(lower(q), lower(title)) across papers."""
+    qn = q.strip()
+    if not qn:
+        return 0.0
+    sql = sa_text(
+        "SELECT COALESCE(MAX(word_similarity(lower(:qn), lower(title))), 0.0) "
+        "FROM papers"
+    )
+    row = db.execute(sql, {"qn": qn}).first()
+    return float(row[0]) if row and row[0] is not None else 0.0
+
+
+def looks_like_title(q: str) -> bool:
+    """Heuristic: does this query look like a paper title (vs. a topic keyword)?
+
+    Independent of DB content so titles for papers we haven't ingested still
+    classify as specific and trigger an OpenReview lookup.
+    """
+    qn = q.strip()
+    if not qn:
+        return False
+    words = [w for w in re.split(r"\s+", qn) if w]
+    n = len(words)
+    if n <= 2:
+        return False
+    # 5+ words: very likely a paper title.
+    if n >= 5:
+        return True
+    # 3–4 words: require title-case-ish capitalization on most words.
+    capitalized = sum(1 for w in words if w[:1].isupper())
+    return capitalized >= n - 1
+
+
+def classify_intent(db: Session, q: str) -> dict[str, object]:
+    """Return {'mode': 'topic'|'specific', 'top_sim': float} for a submitted query.
+
+    A query is "specific" if it's already close to a known paper title OR if it
+    looks like a title on its face (so we still hit OpenReview when our DB is
+    cold).
+    """
+    qn = q.strip()
+    if not qn:
+        return {"mode": "topic", "top_sim": 0.0}
+    top = top_title_similarity(db, qn)
+    threshold = get_settings().search_specific_paper_threshold
+    if top >= threshold or looks_like_title(qn):
+        return {"mode": "specific", "top_sim": top}
+    return {"mode": "topic", "top_sim": top}
+
+
+def best_title_match_id(db: Session, q: str) -> tuple[str | None, float]:
+    """Return (paper_id, score) of the best title-similarity match, if any."""
+    qn = q.strip()
+    if not qn:
+        return None, 0.0
+    sql = sa_text(
+        """
+        SELECT id, word_similarity(lower(:qn), lower(title)) AS sim
+        FROM papers
+        ORDER BY sim DESC
+        LIMIT 1
+        """
+    )
+    row = db.execute(sql, {"qn": qn}).first()
+    if row is None:
+        return None, 0.0
+    return str(row[0]), float(row[1] or 0.0)
+
+
 def _has_embeddings(db: Session) -> bool:
     row = db.execute(sa_text("SELECT EXISTS (SELECT 1 FROM paper_embeddings LIMIT 1)")).first()
     return bool(row and row[0])
@@ -145,7 +218,7 @@ def _browse_candidate_ids(
     db: Session,
     limit: int,
     offset: int,
-    sort_by: SortKey,
+    sort_by: SortKey = "score",
 ) -> list[str]:
     """Return browse-page IDs ranked globally by score or a standardized dimension."""
     if sort_by == "score":
@@ -213,11 +286,62 @@ def build_paper_out(
     )
 
 
+def _relevance_score(db: Session, q: str, paper_ids: list[str]) -> dict[str, float]:
+    """Return per-paper title/abstract relevance for the given query."""
+    if not paper_ids or not q.strip():
+        return {}
+    sql = sa_text(
+        """
+        SELECT id,
+               GREATEST(
+                 word_similarity(lower(:qn), lower(title)),
+                 0.5 * word_similarity(lower(:qn), lower(COALESCE(abstract, '')))
+               ) AS rel,
+               (CASE WHEN title ILIKE :like ESCAPE '\\' THEN 1 ELSE 0 END) AS title_hit
+        FROM papers
+        WHERE id = ANY(:ids)
+        """
+    )
+    like = f"%{_escape_ilike(q.strip())}%"
+    rows = db.execute(
+        sql, {"qn": q.strip(), "like": like, "ids": paper_ids}
+    ).fetchall()
+    return {str(r[0]): float(r[1] or 0.0) + (0.25 if r[2] else 0.0) for r in rows}
+
+
+def count_papers(db: Session, query: str) -> int:
+    """Return total result count for the given query (used for pagination)."""
+    q = query.strip()
+    if not q:
+        return db.exec(select(func.count(Paper.id))).one()  # type: ignore[return-value]
+
+    # Collect all candidates (no slice) and return unique count.
+    candidate_ids: list[str] = list(_fuzzy_text_candidate_ids(db, q))
+    try:
+        if _has_embeddings(db):
+            from app.services.embeddings.factory import get_embedding_provider
+
+            provider = get_embedding_provider()
+            embedding = provider.encode([q])[0]
+            vec_str = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
+            sql = sa_text(
+                "SELECT paper_id FROM paper_embeddings "
+                "ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :n"
+            )
+            rows = db.execute(sql, {"vec": vec_str, "n": _CANDIDATE_POOL}).fetchall()
+            candidate_ids.extend(r[0] for r in rows)
+    except Exception:
+        pass
+
+    return len(set(candidate_ids))
+
+
 def search_papers(
     db: Session,
     query: str,
     limit: int = 20,
     offset: int = 0,
+    mode: SearchMode = "auto",
     sort_by: SortKey = "score",
 ) -> list[PaperOut]:
     q = query.strip()
@@ -282,15 +406,24 @@ def search_papers(
         for pid in unique_ids
         if pid in papers
     ]
-    results.sort(
-        key=lambda x: (
-            getattr(x, sort_by) if getattr(x, sort_by) is not None else 0.0,
-            x.score or 0.0,
-        ),
-        reverse=True,
-    )
+
+    if mode == "specific" and q:
+        rel = _relevance_score(db, q, [r.id for r in results])
+        results.sort(key=lambda x: rel.get(x.id, 0.0), reverse=True)
+    else:
+        results.sort(
+            key=lambda x: (
+                getattr(x, sort_by) if getattr(x, sort_by) is not None else 0.0,
+                x.score or 0.0,
+            ),
+            reverse=True,
+        )
 
     if candidate_ids_are_page:
         return results
 
+    # Empty-query browse: DB already applied OFFSET/LIMIT, so return as-is.
+    # Non-empty query: candidates were collected in bulk; slice here for the page.
+    if not q:
+        return results
     return results[offset : offset + limit]
