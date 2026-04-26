@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   API_BASE_URL,
+  type AuthorRankingDTO,
+  type AuthorRankingOrder,
   type ExplorePathwayDTO,
   type LocalExploreOrderCandidate,
   PaperDetailSchema,
@@ -45,6 +47,10 @@ let corpusCache: PaperDetailDTO[] | null = null;
 let corpusById: Map<string, PaperDetailDTO> | null = null;
 let corpusVersion: string | null = null;
 let corpusCursor: string | null = null;
+let authorRankingsCache: {
+  source: PaperDetailDTO[];
+  rankings: AuthorRankingDTO[];
+} | null = null;
 
 function isBrowser() {
   return typeof window !== "undefined";
@@ -274,6 +280,118 @@ function normalize(value: string | null | undefined): string {
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "");
+}
+
+function splitAuthors(authors: string): string[] {
+  return authors
+    .split(",")
+    .map((author) => author.trim())
+    .filter((author) => author && normalize(author) !== "unknown");
+}
+
+function roundTo(value: number, places: number): number {
+  const factor = 10 ** places;
+  return Math.round(value * factor) / factor;
+}
+
+function buildLocalAuthorRankings(papers: PaperDetailDTO[]): AuthorRankingDTO[] {
+  type AuthorStats = {
+    author: string;
+    scores: number[];
+    topPaper: PaperDetailDTO;
+    lowestPaper: PaperDetailDTO;
+  };
+
+  const byAuthor = new Map<string, AuthorStats>();
+
+  for (const paper of papers) {
+    if (paper.score === null) continue;
+
+    for (const author of splitAuthors(paper.authors)) {
+      const key = normalize(author);
+      const existing = byAuthor.get(key);
+
+      if (!existing) {
+        byAuthor.set(key, {
+          author,
+          scores: [paper.score],
+          topPaper: paper,
+          lowestPaper: paper,
+        });
+        continue;
+      }
+
+      existing.scores.push(paper.score);
+      if (
+        paper.score > (existing.topPaper.score ?? 0) ||
+        (paper.score === existing.topPaper.score && paper.title < existing.topPaper.title)
+      ) {
+        existing.topPaper = paper;
+      }
+      if (
+        paper.score < (existing.lowestPaper.score ?? 0) ||
+        (paper.score === existing.lowestPaper.score && paper.title < existing.lowestPaper.title)
+      ) {
+        existing.lowestPaper = paper;
+      }
+    }
+  }
+
+  return Array.from(byAuthor.values()).map((stats) => {
+    const total = stats.scores.reduce((sum, score) => sum + score, 0);
+    const average = total / stats.scores.length;
+
+    return {
+      author: stats.author,
+      paper_count: stats.scores.length,
+      average_score: roundTo(average, 2),
+      top_paper_id: stats.topPaper.id,
+      top_paper_title: stats.topPaper.title,
+      top_score: roundTo(stats.topPaper.score ?? 0, 1),
+      lowest_paper_id: stats.lowestPaper.id,
+      lowest_paper_title: stats.lowestPaper.title,
+      lowest_score: roundTo(stats.lowestPaper.score ?? 0, 1),
+    };
+  });
+}
+
+async function loadLocalAuthorRankings(): Promise<AuthorRankingDTO[]> {
+  const papers = await loadLocalPaperCorpus();
+  if (authorRankingsCache?.source === papers) return authorRankingsCache.rankings;
+
+  const rankings = buildLocalAuthorRankings(papers);
+  authorRankingsCache = { source: papers, rankings };
+  return rankings;
+}
+
+export async function searchLocalAuthorRankings(
+  limit = 100,
+  minPapers = 3,
+  order: AuthorRankingOrder = "best",
+  query = "",
+): Promise<AuthorRankingDTO[]> {
+  const normalizedQuery = normalize(query.trim());
+  const effectiveMinPapers = normalizedQuery ? 1 : minPapers;
+  const rankings = (await loadLocalAuthorRankings()).filter(
+    (ranking) =>
+      ranking.paper_count >= effectiveMinPapers &&
+      (!normalizedQuery || normalize(ranking.author).includes(normalizedQuery)),
+  );
+
+  rankings.sort((left, right) => {
+    const scoreDelta =
+      order === "worst"
+        ? left.average_score - right.average_score
+        : right.average_score - left.average_score;
+
+    return (
+      scoreDelta ||
+      right.paper_count - left.paper_count ||
+      left.author.localeCompare(right.author)
+    );
+  });
+
+  return rankings.slice(0, limit);
 }
 
 function tokens(value: string): string[] {
