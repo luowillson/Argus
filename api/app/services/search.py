@@ -133,6 +133,24 @@ def _has_embeddings(db: Session) -> bool:
     return bool(row and row[0])
 
 
+def _browse_candidate_ids(db: Session, limit: int, offset: int) -> list[str]:
+    """Return browse-page IDs ranked globally by Veros score."""
+    sql = sa_text(
+        """
+        SELECT p.id
+        FROM papers p
+        LEFT JOIN veros_scores s ON s.paper_id = p.id
+        ORDER BY
+          s.score DESC NULLS LAST,
+          p.ingested_at DESC NULLS LAST,
+          p.created_at DESC
+        LIMIT :lim OFFSET :off
+        """
+    )
+    rows = db.execute(sql, {"lim": limit, "off": offset}).fetchall()
+    return [r[0] for r in rows]
+
+
 def build_paper_out(
     paper: Paper,
     score_row: VerosScore | None,
@@ -176,12 +194,11 @@ def search_papers(
 ) -> list[PaperOut]:
     q = query.strip()
     candidate_ids: list[str] = []
+    candidate_ids_are_page = False
 
     if not q:
-        rows = db.exec(
-            select(Paper.id).order_by(Paper.ingested_at.desc()).limit(_CANDIDATE_POOL)  # type: ignore[attr-defined]
-        ).all()
-        candidate_ids = list(rows)
+        candidate_ids = _browse_candidate_ids(db, limit, offset)
+        candidate_ids_are_page = True
     else:
         candidate_ids.extend(_fuzzy_text_candidate_ids(db, q))
 
@@ -236,5 +253,8 @@ def search_papers(
         if pid in papers
     ]
     results.sort(key=lambda x: (x.score or 0.0), reverse=True)
+
+    if candidate_ids_are_page:
+        return results
 
     return results[offset : offset + limit]
