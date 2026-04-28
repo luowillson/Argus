@@ -3,10 +3,11 @@ import traceback
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import corpus, health, papers, pathways, rankings, saved, search
+from app.routers import health, papers, pathways, rankings, saved, search
 
 logger = logging.getLogger(__name__)
 
@@ -15,17 +16,15 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="Veros API", version="0.1.0")
 
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "If-None-Match"],
     )
 
-    # Catch-all so unhandled exceptions still return through CORS middleware —
-    # otherwise the browser shows a misleading CORS error in place of the real
-    # 500. Logs the traceback so we still see the cause.
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.error(
@@ -34,13 +33,12 @@ def create_app() -> FastAPI:
             request.url.path,
             "".join(traceback.format_exception(exc)),
         )
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"{type(exc).__name__}: {exc}"},
+        detail = (
+            f"{type(exc).__name__}: {exc}" if settings.debug else "Internal server error"
         )
+        return JSONResponse(status_code=500, content={"detail": detail})
 
     app.include_router(health.router, prefix="/api/v1")
-    app.include_router(corpus.router, prefix="/api/v1")
     app.include_router(papers.router, prefix="/api/v1")
     app.include_router(pathways.router, prefix="/api/v1")
     app.include_router(rankings.router, prefix="/api/v1")

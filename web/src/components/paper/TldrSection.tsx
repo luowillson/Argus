@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LatexText } from "@/components/ui/LatexText";
-import { analyzePaper, fetchPaperClient } from "@/lib/api";
-import { upsertLocalPaper } from "@/lib/localPapers";
+import { analyzePaper, fetchPaper } from "@/lib/api";
 
 type Props = {
   paperId: string;
@@ -51,12 +50,11 @@ export function TldrSection({
     async function generateSummary() {
       try {
         await analyzePaper(paperId);
-        const result = await fetchPaperClient(paperId, { refresh: true });
-        if (cancelled || !result || result === "queued" || result === "failed") return;
+        const result = await fetchPaper(paperId);
+        if (cancelled || result.kind !== "ready") return;
 
-        if (result.tldr) {
-          upsertLocalPaper(result);
-          setSummary(result.tldr);
+        if (result.paper.tldr) {
+          setSummary(result.paper.tldr);
           setStatus("idle");
           setError(null);
           router.refresh();

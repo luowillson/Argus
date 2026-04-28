@@ -54,6 +54,23 @@ Service functions are imported inside the task body (not at module level) to avo
 ### LLM max_output_tokens must be ≥ 4000
 Setting it lower (e.g. 1500) causes Gemini to truncate mid-JSON. Don't reduce it.
 
+### API is the single source of truth — no client-side mirror
+The web app does not maintain a local paper corpus, no `localStorage` paper
+cache, and no static `papers.json`. Every page fetches from the API. Saved
+papers go through `/api/v1/saved` (server-backed via the demo user). If you
+need to add caching, do it via HTTP `Cache-Control` headers and Next.js
+`fetch({ next: { revalidate, tags } })`, not by stashing data in storage.
+
+### `fetchPaper` returns a discriminated union
+```ts
+type PaperFetchResult =
+  | { kind: "ready"; paper: PaperDetailDTO }
+  | { kind: "queued" }
+  | { kind: "failed" }
+  | { kind: "not_found" };
+```
+Don't compare against string literals; switch on `kind`.
+
 ---
 
 ## Running everything locally
@@ -101,10 +118,12 @@ Root helpers exist for the common commands: `make redis-up`, `make infra-up`,
 | `api/app/services/llm/factory.py` | `make_llm_provider()` — reads `LLM_PROVIDER` env var |
 | `api/app/services/llm/prompts.py` | `SYSTEM_PROMPT`, `build_user_prompt()` |
 | `api/app/workers/tasks.py` | `ingest_paper_task`, `embed_paper_task` |
-| `web/src/lib/api.ts` | All fetch functions + Zod schemas — single source of truth for API contract |
+| `web/src/lib/api.ts` | All fetch functions + Zod schemas. `fetchPaper` returns a discriminated union; saved/unsave hit the real `/saved` API. |
 | `web/src/lib/adapt.ts` | `adaptPaperDetail()`, `adaptPaperOut()` — DTO → frontend `Paper` type |
-| `web/src/components/paper/PaperView.tsx` | Shared render tree (used by server page + PaperPending client) |
-| `web/src/components/paper/PaperPending.tsx` | Client polling component (polls /status, shows skeleton) |
+| `web/src/components/paper/PaperView.tsx` | Shared render tree (used by paper page + PaperPending) |
+| `web/src/components/paper/PaperPending.tsx` | Client polling component (polls `/status`, then re-fetches via `fetchPaper`) |
+| `api/app/routers/papers.py` | `GET /papers/{id}` (with `Cache-Control` when ready), `GET /status`, `POST /papers/batch`, `POST /analyze`, `POST /ingest` |
+| `api/app/main.py` | App factory: GZip + CORS middleware, prod-safe 500 handler (`DEBUG=true` to see exception messages locally) |
 
 ---
 

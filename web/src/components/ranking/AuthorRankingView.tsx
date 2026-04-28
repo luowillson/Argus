@@ -6,11 +6,8 @@ import { AuthorRankingTable } from "@/components/ranking/AuthorRankingTable";
 import {
   type AuthorRankingDTO,
   type AuthorRankingOrder,
+  fetchAuthorRankings,
 } from "@/lib/api";
-import {
-  LOCAL_CORPUS_UPDATED_EVENT,
-  searchLocalAuthorRankings,
-} from "@/lib/localPapers";
 import { cn } from "@/lib/utils";
 
 type Mode = AuthorRankingOrder | "search";
@@ -35,10 +32,11 @@ function cacheKey(mode: Mode, query: string) {
   return `${mode}:${query.toLowerCase()}`;
 }
 
-function fetchRankings(mode: Mode, query: string) {
-  return mode === "search"
-    ? searchLocalAuthorRankings(500, 1, "best", query)
-    : searchLocalAuthorRankings(100, 3, mode);
+function fetchRankings(mode: Mode, query: string, signal?: AbortSignal) {
+  if (mode === "search") {
+    return fetchAuthorRankings(500, 1, "best", query, { signal });
+  }
+  return fetchAuthorRankings(100, 3, mode, "", { signal });
 }
 
 export function AuthorRankingView({
@@ -85,46 +83,31 @@ export function AuthorRankingView({
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     const normalizedQuery = normalizedQueryForMode(initialMode, initialQuery);
     const key = cacheKey(initialMode, normalizedQuery);
     cache.current.clear();
 
-    async function hydrateRankings() {
-      try {
-        const next = await fetchRankings(initialMode, normalizedQuery);
-        if (cancelled) return;
+    fetchRankings(initialMode, normalizedQuery, controller.signal)
+      .then((next) => {
+        if (controller.signal.aborted) return;
         cache.current.set(key, next);
         setMode(initialMode);
         setQuery(normalizedQuery);
         setRankings(next);
         setError(false);
-      } catch {
-        if (cancelled) return;
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
         setRankings([]);
         setError(true);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
 
-    void hydrateRankings();
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [initialMode, initialQuery]);
-
-  useEffect(() => {
-    function refreshRankings() {
-      cache.current.clear();
-      void load(mode, query);
-    }
-
-    window.addEventListener(LOCAL_CORPUS_UPDATED_EVENT, refreshRankings);
-    return () => {
-      window.removeEventListener(LOCAL_CORPUS_UPDATED_EVENT, refreshRankings);
-    };
-  }, [load, mode, query]);
 
   function submitSearch(nextQuery: string) {
     void load("search", nextQuery);

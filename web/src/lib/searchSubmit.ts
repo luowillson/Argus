@@ -1,15 +1,17 @@
 import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
+import { lookupSearch } from "./api";
 import { getSearchDestination } from "./query";
 
 /**
  * Shared submit logic for the landing search box and the browse search bar.
  *
  * 1. If the query is an OpenReview forum URL or raw forum id, route directly
- *    to the paper page (existing fast-path).
- * 2. Otherwise classify against the static browser corpus and route to
- *    /search with params describing the result.
+ *    to the paper page.
+ * 2. Otherwise call /search/lookup which classifies the query, optionally
+ *    enqueues an OpenReview ingest, and returns either a focused paper id or
+ *    the topic results. We pick the destination from that response.
  *
- * Returns the destination href that was navigated to (useful for tests).
+ * Returns the destination href that was navigated to.
  */
 export async function submitSearch(
   rawQuery: string,
@@ -25,8 +27,20 @@ export async function submitSearch(
     return dest.href;
   }
 
-  const { getLocalSearchDestination } = await import("./localPapers");
-  const href = await getLocalSearchDestination(trimmed);
+  let href = `/search?q=${encodeURIComponent(trimmed)}`;
+  try {
+    const lookup = await lookupSearch(trimmed);
+    if (lookup.intent === "specific" && lookup.paper_id) {
+      const params = new URLSearchParams({ q: trimmed, focus: lookup.paper_id });
+      if (lookup.openreview_candidate?.title) {
+        params.set("pending", lookup.openreview_candidate.title);
+      }
+      href = `/search?${params}`;
+    }
+  } catch {
+    // Lookup failure shouldn't block navigation — fall through to the topic page.
+  }
+
   (opts.replace ? router.replace : router.push)(href);
   return href;
 }

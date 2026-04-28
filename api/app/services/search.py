@@ -349,7 +349,7 @@ def _relevance_score(db: Session, q: str, paper_ids: list[str]) -> dict[str, flo
     return {str(r[0]): float(r[1] or 0.0) + (0.25 if r[2] else 0.0) for r in rows}
 
 
-def _build_results_for_ids(db: Session, unique_ids: list[str]) -> list[PaperOut]:
+def build_results_for_ids(db: Session, unique_ids: list[str]) -> list[PaperOut]:
     if not unique_ids:
         return []
 
@@ -419,13 +419,13 @@ def search_papers(
         sort_by = "relevance"
 
     if not q:
-        results = _build_results_for_ids(
+        results = build_results_for_ids(
             db, _browse_candidate_ids(db, limit, offset, sort_by)
         )
         _sort_results(db, q, results, mode, sort_by)
         return results
 
-    results = _build_results_for_ids(db, _query_candidate_ids(db, q))
+    results = build_results_for_ids(db, _query_candidate_ids(db, q))
     _sort_results(db, q, results, mode, sort_by)
     return results[offset : offset + limit]
 
@@ -448,6 +448,6 @@ def search_papers_with_total(
             db, q, limit=limit, offset=offset, mode=mode, sort_by=sort_by
         ), int(total)
 
-    results = _build_results_for_ids(db, _query_candidate_ids(db, q))
+    results = build_results_for_ids(db, _query_candidate_ids(db, q))
     _sort_results(db, q, results, mode, sort_by)
     return results[offset : offset + limit], len(results)

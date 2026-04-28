@@ -1,16 +1,22 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from app.db.models import Paper
 from app.deps import DbSession
-from app.schemas.paper import PaperDetail, PaperStatus
+from app.schemas.paper import PaperDetail, PaperOut, PaperStatus
 from app.services.analyze import AnalyzeError, analyze_paper
 from app.services.ingest import ingest_paper
 from app.services.ingest_failures import get_ingest_failure
 from app.services.openreview_client import parse_forum_id
 from app.services.paper_view import build_paper_detail
+from app.services.search import build_results_for_ids
 
 router = APIRouter(prefix="/papers", tags=["papers"])
+
+# Cache-Control for analyzed papers. Edge/CDN can serve repeats nearly free
+# while the worker keeps freshness on its own schedule.
+_PAPER_CACHE_HEADER = "public, max-age=300, stale-while-revalidate=86400"
 
 
 @router.get("/{paper_id}/status", response_model=PaperStatus)
@@ -26,8 +32,23 @@ def get_status(paper_id: str, db: DbSession) -> PaperStatus:
     return PaperStatus(paper_id=forum_id, ingest="ready", analysis=analysis)  # type: ignore[arg-type]
 
 
+class PapersBatchRequest(BaseModel):
+    ids: list[str]
+
+
+@router.post("/batch", response_model=list[PaperOut])
+def get_papers_batch(req: PapersBatchRequest, db: DbSession) -> list[PaperOut]:
+    """Fetch many papers by id in one query. Used by the saved/reading-list page."""
+    if not req.ids:
+        return []
+    if len(req.ids) > 200:
+        raise HTTPException(status_code=400, detail="batch size too large (max 200)")
+    forum_ids = [parse_forum_id(pid) for pid in req.ids]
+    return build_results_for_ids(db, forum_ids)
+
+
 @router.get("/{paper_id}", response_model=PaperDetail)
-def get_paper(paper_id: str, db: DbSession) -> PaperDetail | JSONResponse:
+def get_paper(paper_id: str, db: DbSession, response: Response) -> PaperDetail | JSONResponse:
     """Return a fully assembled PaperDetail.
 
     If the paper is not yet in the DB, enqueue a background ingest and return
@@ -43,7 +64,7 @@ def get_paper(paper_id: str, db: DbSession) -> PaperDetail | JSONResponse:
                 content={"status": "failed", "paper_id": forum_id},
             )
 
-        from app.workers.tasks import ingest_paper_task  # late import
+        from app.workers.tasks import ingest_paper_task  # noqa: PLC0415  late import
 
         ingest_paper_task.delay(forum_id)
         return JSONResponse(
@@ -54,6 +75,11 @@ def get_paper(paper_id: str, db: DbSession) -> PaperDetail | JSONResponse:
     detail = build_paper_detail(db, forum_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"paper {paper_id!r} not found")
+
+    if detail.status == "ready":
+        response.headers["Cache-Control"] = _PAPER_CACHE_HEADER
+    else:
+        response.headers["Cache-Control"] = "no-store"
     return detail
 
 

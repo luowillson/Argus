@@ -1,6 +1,6 @@
 import { SearchView } from "@/components/search/SearchView";
-import { type SearchSortKey } from "@/lib/api";
-import { VEROS_PAPERS } from "@/lib/mock-papers";
+import { fetchSearchPage, type SearchSortKey } from "@/lib/api";
+import { adaptPaperOut } from "@/lib/adapt";
 import type { Paper } from "@/lib/types";
 
 const SORT_LABELS: Record<SearchSortKey, string> = {
@@ -12,10 +12,7 @@ const SORT_LABELS: Record<SearchSortKey, string> = {
   impact: "impact",
 };
 
-function parseSort(
-  value: string | undefined,
-  hasQuery: boolean,
-): SearchSortKey {
+function parseSort(value: string | undefined, hasQuery: boolean): SearchSortKey {
   if (
     value === "relevance" ||
     value === "score" ||
@@ -55,33 +52,18 @@ export default async function SearchPage({
   const activeSort = parseSort(sort, Boolean(query));
   const currentPage = Math.max(1, parseInt(pageParam, 10) || 1);
   const offset = (currentPage - 1) * PAGE_SIZE;
+  const mode = focus ? "specific" : "auto";
 
-  let results: Paper[] = [];
-  let totalPages = 1;
-  let totalCount = 0;
-  const all = query
-    ? VEROS_PAPERS.filter((p) => {
-        const hay = `${p.title} ${p.authors} ${p.tldr} ${p.venue}`.toLowerCase();
-        return hay.includes(query.toLowerCase());
-      })
-    : VEROS_PAPERS;
-  const sorted = [...all].sort((a, b) => {
-    if (activeSort === "relevance") {
-      const qn = query.toLowerCase();
-      const rank = (paper: Paper) => {
-        const title = paper.title.toLowerCase();
-        const abstract = paper.tldr.toLowerCase();
-        return (title.includes(qn) ? 2 : 0) + (abstract.includes(qn) ? 1 : 0);
-      };
-      return rank(b) - rank(a) || (b.score ?? 0) - (a.score ?? 0);
-    }
-    const left = activeSort === "score" ? (a.score ?? 0) : (a[activeSort] ?? 0);
-    const right = activeSort === "score" ? (b.score ?? 0) : (b[activeSort] ?? 0);
-    return right - left || (b.score ?? 0) - (a.score ?? 0);
-  });
-  totalCount = sorted.length;
-  totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
-  results = sorted.slice(offset, offset + PAGE_SIZE);
+  let initialResults: Paper[] = [];
+  let initialTotalCount = 0;
+  try {
+    const page = await fetchSearchPage(query, PAGE_SIZE, offset, mode, activeSort);
+    initialResults = page.results.map(adaptPaperOut);
+    initialTotalCount = page.total;
+  } catch {
+    // Server-side fetch failed; client component will retry on mount.
+  }
+  const totalPages = Math.max(1, Math.ceil(initialTotalCount / PAGE_SIZE));
 
   return (
     <SearchView
@@ -94,16 +76,15 @@ export default async function SearchPage({
         pending ?? "",
       ].join(":")}
       initialQuery={query}
-      initialResults={results}
+      initialResults={initialResults}
       initialFocusId={focus}
       initialNotFound={notFound === "1"}
       initialPendingTitle={pending}
-      initialTotalCount={totalCount}
+      initialTotalCount={initialTotalCount}
       currentPage={currentPage}
       totalPages={totalPages}
       activeSort={activeSort}
       sortLabel={SORT_LABELS[activeSort]}
-      clientFetch
     />
   );
 }

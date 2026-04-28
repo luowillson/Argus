@@ -7,12 +7,13 @@ import { ResultRow } from "@/components/search/ResultRow";
 import { PaperPendingCard } from "@/components/search/PaperPendingCard";
 import { PaginationBar } from "@/components/search/PaginationBar";
 import { SortControl } from "@/components/search/SortControl";
-import { getLocalSavedPaperIds, type SearchSortKey } from "@/lib/api";
-import { adaptPaperOut } from "@/lib/adapt";
 import {
-  LOCAL_CORPUS_UPDATED_EVENT,
-  searchLocalPapers,
-} from "@/lib/localPapers";
+  fetchSaved,
+  fetchSearchPage,
+  type SearchMode,
+  type SearchSortKey,
+} from "@/lib/api";
+import { adaptPaperOut } from "@/lib/adapt";
 import { submitSearch } from "@/lib/searchSubmit";
 import type { Paper } from "@/lib/types";
 
@@ -27,7 +28,6 @@ type Props = {
   totalPages?: number;
   activeSort?: SearchSortKey;
   sortLabel?: string;
-  clientFetch?: boolean;
 };
 
 const DEBOUNCE_MS = 450;
@@ -81,7 +81,6 @@ export function SearchView({
   totalPages = 1,
   activeSort = "score",
   sortLabel = "Veros score",
-  clientFetch = false,
 }: Props) {
   const router = useRouter();
 
@@ -92,25 +91,30 @@ export function SearchView({
     initialPendingTitle ?? null,
   );
   const [notFound, setNotFound] = useState(initialNotFound);
-  const [remoteTotalCount, setRemoteTotalCount] = useState(initialTotalCount ?? initialResults.length);
+  const [remoteTotalCount, setRemoteTotalCount] = useState(
+    initialTotalCount ?? initialResults.length,
+  );
   const [remoteTotalPages, setRemoteTotalPages] = useState(totalPages);
   const [displayPage, setDisplayPage] = useState(currentPage);
-  const [corpusRevision, setCorpusRevision] = useState(0);
   const [savedIds, setSavedIds] = useState<Set<string>>(() => new Set());
   const [submitting, setSubmitting] = useState(false);
   const lastIssuedQ = useRef(initialQuery);
 
+  // Pull saved-paper ids from the API (single source of truth) on mount and
+  // whenever the tab regains focus, so the bookmark indicator stays fresh
+  // across tabs/devices.
   useEffect(() => {
-    function syncSavedIds() {
-      setSavedIds(new Set(getLocalSavedPaperIds()));
+    const controller = new AbortController();
+    function refreshSaved() {
+      fetchSaved({ signal: controller.signal })
+        .then((dtos) => setSavedIds(new Set(dtos.map((d) => d.id))))
+        .catch(() => undefined);
     }
-
-    syncSavedIds();
-    window.addEventListener("storage", syncSavedIds);
-    window.addEventListener("focus", syncSavedIds);
+    refreshSaved();
+    window.addEventListener("focus", refreshSaved);
     return () => {
-      window.removeEventListener("storage", syncSavedIds);
-      window.removeEventListener("focus", syncSavedIds);
+      controller.abort();
+      window.removeEventListener("focus", refreshSaved);
     };
   }, []);
 
@@ -129,54 +133,6 @@ export function SearchView({
     };
   }, []);
 
-  useEffect(() => {
-    function bumpCorpusRevision() {
-      setCorpusRevision((value) => value + 1);
-    }
-
-    window.addEventListener(LOCAL_CORPUS_UPDATED_EVENT, bumpCorpusRevision);
-    return () => {
-      window.removeEventListener(LOCAL_CORPUS_UPDATED_EVENT, bumpCorpusRevision);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!clientFetch) return;
-    const controller = new AbortController();
-    const urlPage = pageFromBrowserUrl();
-    const offset = (urlPage - 1) * PAGE_SIZE;
-    const mode = initialFocusId ? "specific" : "topic";
-    const urlQuery = queryFromBrowserUrl();
-    const normalizedSort = sortForQuery(urlQuery, activeSort);
-
-    async function loadPage() {
-      try {
-        const page = await searchLocalPapers(
-          urlQuery,
-          PAGE_SIZE,
-          offset,
-          mode,
-          normalizedSort,
-        );
-        if (controller.signal.aborted) return;
-        if (queryFromBrowserUrl() !== urlQuery || pageFromBrowserUrl() !== urlPage) {
-          return;
-        }
-        setQ(urlQuery);
-        lastIssuedQ.current = urlQuery;
-        setDisplayPage(urlPage);
-        setResults(page.results.map(adaptPaperOut));
-        setRemoteTotalCount(page.total);
-        setRemoteTotalPages(Math.max(1, Math.ceil(page.total / PAGE_SIZE)));
-      } catch {
-        // Keep the local fallback results when the API is unavailable.
-      }
-    }
-
-    loadPage();
-    return () => controller.abort();
-  }, [activeSort, clientFetch, corpusRevision, currentPage, initialFocusId, initialQuery]);
-
   // Debounced live topic search on typing.
   useEffect(() => {
     if (q === lastIssuedQ.current) return;
@@ -187,11 +143,16 @@ export function SearchView({
       lastIssuedQ.current = q;
       try {
         const normalizedSort = sortForQuery(trimmed, activeSort);
-        const page = await searchLocalPapers(trimmed, 20, 0, "topic", normalizedSort);
+        const page = await fetchSearchPage(
+          trimmed,
+          PAGE_SIZE,
+          0,
+          "topic",
+          normalizedSort,
+          { signal: controller.signal },
+        );
         if (controller.signal.aborted) return;
-        const mapped = page.results.map(adaptPaperOut);
-        // Live typing always re-enters topic mode and clears focus/notFound.
-        setResults(mapped);
+        setResults(page.results.map(adaptPaperOut));
         setRemoteTotalCount(page.total);
         setRemoteTotalPages(Math.max(1, Math.ceil(page.total / PAGE_SIZE)));
         setFocusId(null);
@@ -201,7 +162,7 @@ export function SearchView({
         replaceBrowserUrl(liveSearchHref(trimmed, normalizedSort));
       } catch (err) {
         if ((err as { name?: string })?.name !== "AbortError") {
-          // swallow other errors silently — keep prior results
+          // Keep prior results on error.
         }
       }
     }, DEBOUNCE_MS);
@@ -216,10 +177,17 @@ export function SearchView({
     if (!trimmed) {
       lastIssuedQ.current = "";
       setQ("");
-      const page = await searchLocalPapers("", PAGE_SIZE, 0, "topic", "score");
-      setResults(page.results.map(adaptPaperOut));
-      setRemoteTotalCount(page.total);
-      setRemoteTotalPages(Math.max(1, Math.ceil(page.total / PAGE_SIZE)));
+      const mode: SearchMode = "topic";
+      try {
+        const page = await fetchSearchPage("", PAGE_SIZE, 0, mode, "score");
+        setResults(page.results.map(adaptPaperOut));
+        setRemoteTotalCount(page.total);
+        setRemoteTotalPages(Math.max(1, Math.ceil(page.total / PAGE_SIZE)));
+      } catch {
+        setResults([]);
+        setRemoteTotalCount(0);
+        setRemoteTotalPages(1);
+      }
       setFocusId(null);
       setPendingTitle(null);
       setNotFound(false);
@@ -230,9 +198,6 @@ export function SearchView({
     if (submitting) return;
     setSubmitting(true);
     try {
-      // submitSearch handles the URL/ID fast-path, the lookupSearch call,
-      // and navigation. The page server-renders the new params and SearchView
-      // re-mounts with the right initial state.
       await submitSearch(query, router, { replace: true });
     } finally {
       setSubmitting(false);
