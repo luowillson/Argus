@@ -50,8 +50,8 @@ export function PaperPendingCard({ paperId, title, isFirst }: Props) {
         if (status.analysis === "ready" || status.ingest === "ready") {
           setPhase("loading");
           const result = await fetchPaper(paperId);
-          if (!cancelled && result && result !== "queued" && result !== "failed") {
-            setPaper(adaptPaperDetail(result));
+          if (!cancelled && result.kind === "ready") {
+            setPaper(adaptPaperDetail(result.paper));
             return;
           }
         }

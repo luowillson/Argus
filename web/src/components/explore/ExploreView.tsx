@@ -6,8 +6,8 @@ import { useEffect, useState } from "react";
 import {
   type ExplorePathwayDTO,
   type ExplorePathwayItemDTO,
+  postExplorePath,
 } from "@/lib/api";
-import { buildLocalExplorePath } from "@/lib/localPapers";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -16,7 +16,7 @@ type Props = {
 
 const LOADING_STEPS = [
   "Drafting sub-topics…",
-  "Searching the local paper corpus…",
+  "Searching the paper corpus…",
   "Ranking each topic by Veros score…",
   "Ordering the sequence for learning…",
 ];
@@ -26,7 +26,7 @@ export function ExploreView({ initialTopic }: Props) {
   const [topic, setTopic] = useState(initialTopic);
   const [submitted, setSubmitted] = useState(initialTopic);
   const [pathway, setPathway] = useState<ExplorePathwayDTO | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => Boolean(initialTopic.trim()));
   const [error, setError] = useState<string | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
   const [requestKey, setRequestKey] = useState(0);
@@ -41,36 +41,25 @@ export function ExploreView({ initialTopic }: Props) {
 
   useEffect(() => {
     const target = submitted.trim();
-    if (!target) {
-      return;
-    }
+    if (!target) return;
 
-    let cancelled = false;
+    const controller = new AbortController();
 
-    async function loadPathway() {
-      await Promise.resolve();
-      if (cancelled) return;
-      setLoading(true);
-      setError(null);
-      setPathway(null);
-
-      try {
-        const data = await buildLocalExplorePath(target);
-        if (cancelled) return;
+    postExplorePath(target, false, controller.signal)
+      .then((data) => {
+        if (controller.signal.aborted) return;
         setPathway(data);
-      } catch (err: unknown) {
-        if (cancelled) return;
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
         setError(err instanceof Error ? err.message : "Failed to build learning path");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
 
-    loadPathway();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [requestKey, submitted]);
 
   function onSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -140,8 +129,7 @@ function LoadingState({ message }: { message: string }) {
         <span>{message}</span>
       </div>
       <p className="mt-2 text-[12px] text-muted">
-        Reading from the local paper JSON corpus, then ranking matches into a
-        learning sequence.
+        Searching the paper corpus, then ranking matches into a learning sequence.
       </p>
     </div>
   );

@@ -18,7 +18,6 @@ from app.db.models import (
     Paper,
     PaperConcept,
     PaperEdge,
-    PaperEmbedding,
     VerosScore,
 )
 from app.schemas.paper import PaperOut

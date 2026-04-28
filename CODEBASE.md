@@ -44,9 +44,11 @@ Veros fetches official peer reviews from OpenReview, computes a deterministic **
 │       ├── schemas/
 │       │   └── paper.py        ← Pydantic response models: PaperDetail, PaperOut, PaperStatus
 │       ├── routers/
-│       │   ├── health.py       ← GET /health, GET /stats
-│       │   ├── papers.py       ← GET/POST /papers/{id}, /status, /ingest, /analyze
-│       │   ├── search.py       ← GET /search
+│       │   ├── health.py       ← GET /health, GET /stats, GET /landing/graph
+│       │   ├── papers.py       ← GET /{id}, GET /{id}/status, POST /batch, POST /{id}/ingest, POST /{id}/analyze
+│       │   ├── search.py       ← GET /search, /search/page, /search/count, POST /search/lookup
+│       │   ├── pathways.py     ← Explore learning pathways
+│       │   ├── rankings.py     ← Author rankings
 │       │   └── saved.py        ← GET/POST/DELETE /saved
 │       ├── services/
 │       │   ├── openreview_client.py  ← OpenReview API v1/v2 abstraction
@@ -76,22 +78,26 @@ Veros fetches official peer reviews from OpenReview, computes a deterministic **
     ├── .env.local              ← NEXT_PUBLIC_API_BASE_URL
     └── src/
         ├── app/
-        │   ├── layout.tsx      ← Newsreader/Inter/IBM Plex Mono fonts, Providers, Toaster
+        │   ├── layout.tsx      ← Newsreader/Inter/IBM Plex Mono fonts, Toaster
         │   ├── globals.css     ← Tailwind v4 @theme (all color/font tokens)
-        │   ├── providers.tsx   ← TanStack QueryClient wrapper
         │   ├── not-found.tsx   ← 404 page
         │   ├── page.tsx        ← Landing (Hero + SearchBox + StatsFooter)
-        │   ├── search/page.tsx ← Search results (server component, calls /search)
-        │   ├── papers/[id]/page.tsx ← Paper detail or <PaperPending> skeleton
-        │   └── saved/page.tsx  ← Reading list (server component, calls /saved)
+        │   ├── search/page.tsx ← Search results (server component, calls /search/page)
+        │   ├── papers/[id]/page.tsx ← Loads PaperPageClient (handles ready/queued/failed/not-found)
+        │   ├── saved/page.tsx  ← Reading list (calls /saved)
+        │   ├── ranking/        ← Author ranking pages (calls /rankings/authors)
+        │   └── explore/page.tsx ← Learning pathway (calls /pathways/explore)
         ├── components/
         │   ├── brand/          ← VerosMark, VIcon, VerdictPill
         │   ├── nav/            ← TopNav, SearchHeaderBar
-        │   ├── landing/        ← Hero, SearchBox (client), StatsFooter (async server)
-        │   ├── search/         ← ResultsGrid, ResultRow, MetricsCell
+        │   ├── landing/        ← Hero, SearchBox (client), StatsFooter (async server, calls /stats)
+        │   ├── search/         ← ResultsGrid, ResultRow, MetricsCell, SearchView
+        │   ├── ranking/        ← AuthorRankingView, AuthorRankingTable, AuthorRankingSearch
+        │   ├── explore/        ← ExploreView
         │   └── paper/
-        │       ├── PaperView.tsx         ← shared render tree (used by page + PaperPending)
-        │       ├── PaperPending.tsx      ← client component, polls /status every 2s
+        │       ├── PaperView.tsx         ← shared render tree
+        │       ├── PaperPageClient.tsx   ← top-level paper-detail loader (discriminated union)
+        │       ├── PaperPending.tsx      ← client component, polls /status every 5s
         │       ├── PaperHeader.tsx       ← title, authors, openreview link, SaveButton
         │       ├── ScoreBand.tsx         ← score + grade + DimensionTiles + MethodologyDialog
         │       ├── DimensionTiles.tsx    ← 4 tiles, /100, pending=true shows "—"
@@ -99,12 +105,13 @@ Veros fetches official peer reviews from OpenReview, computes a deterministic **
         │       ├── ReadSkimGrid.tsx      ← deep/skim two-column grid
         │       ├── ReviewerVoices.tsx    ← reviewer quotes + empty state
         │       ├── MethodologyDialog.tsx ← "How is this scored?" modal (client)
-        │       └── SaveButton.tsx        ← optimistic save/unsave with sonner toast
+        │       └── SaveButton.tsx        ← optimistic save/unsave via /saved API
         └── lib/
-            ├── api.ts          ← API_BASE_URL, all fetch functions, Zod schemas
+            ├── api.ts          ← API_BASE_URL, all fetch functions, Zod schemas (single source of truth)
             ├── adapt.ts        ← adaptPaperDetail(), adaptPaperOut() DTO→Paper
             ├── types.ts        ← Paper, ReviewerVoice, Verdict TypeScript types
-            ├── mock-papers.ts  ← VEROS_PAPERS array (fallback when API unreachable)
+            ├── searchSubmit.ts ← shared search-bar submit logic (URL fast-path + /search/lookup)
+            ├── query.ts        ← OpenReview URL/id parser
             └── utils.ts        ← cn(), scoreColor()
 ```
 
@@ -348,7 +355,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
 
 **Search columns** — `grid-cols-[78px_70px_1fr_140px_180px_120px]` (Score | Grade | Paper | Venue | Metrics | Verdict). `MetricsCell` shows `nov/tech/clar/imp` as numbers/100, no bars.
 
-**Mock fallback** — server-side pages call the API first. If the API is unreachable, they fall back to `VEROS_PAPERS` from `mock-papers.ts`; search also falls back to mock data when the API returns no results. This keeps the UI browseable without the API.
+**No client-side mirror** — there is no `localPapers`, no `mock-papers`, no static `papers.json`. The API is the single source of truth on every request. If the API is unreachable, pages render an empty state and the client retries on focus. Saved papers go through the real `/api/v1/saved` endpoints (server-backed via the demo user); cross-device sync requires real auth.
 
 **`aiReady` flag** — controls whether dimension tiles show numbers or "—" and whether the TL;DR section shows an "insights pending" badge. Derived from `dto.status === "ready"`.
 

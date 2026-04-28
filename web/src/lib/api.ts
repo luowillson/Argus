@@ -3,23 +3,43 @@ import { z } from "zod";
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
-const API_READ_TIMEOUT_MS = 3500;
-const RANKING_API_TIMEOUT_MS = 15000;
-const PAPER_CACHE_TTL_MS = 30 * 60 * 1000;
-const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
-const SAVED_PAPER_IDS_KEY = "veros:saved-paper-ids:v1";
+const DEFAULT_TIMEOUT_MS = 8_000;
+const RANKING_TIMEOUT_MS = 15_000;
+const EXPLORE_TIMEOUT_MS = 60_000;
 
-function withReadTimeout(
-  init: RequestInit = {},
-  timeoutMs = API_READ_TIMEOUT_MS,
-): RequestInit {
-  if (init.signal) return init;
-  if (typeof AbortSignal.timeout === "function") {
-    return { ...init, signal: AbortSignal.timeout(timeoutMs) };
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+  if (typeof AbortController === "undefined") return undefined;
+  const c = new AbortController();
+  setTimeout(() => c.abort(), ms);
+  return c.signal;
+}
+
+function combineSignals(signals: (AbortSignal | undefined)[]): AbortSignal | undefined {
+  const present = signals.filter((s): s is AbortSignal => s !== undefined);
+  if (present.length === 0) return undefined;
+  if (present.length === 1) return present[0];
+  if (typeof AbortSignal.any === "function") return AbortSignal.any(present);
+  const c = new AbortController();
+  for (const s of present) {
+    if (s.aborted) return (c.abort(), c.signal);
+    s.addEventListener("abort", () => c.abort(), { once: true });
   }
-  const controller = new AbortController();
-  setTimeout(() => controller.abort(), timeoutMs);
-  return { ...init, signal: controller.signal };
+  return c.signal;
+}
+
+function withTimeout(init: RequestInit, ms = DEFAULT_TIMEOUT_MS): RequestInit {
+  return { ...init, signal: combineSignals([init.signal ?? undefined, timeoutSignal(ms)]) };
+}
+
+async function readErrorDetail(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = await res.json();
+    if (typeof body?.detail === "string" && body.detail.trim()) return body.detail;
+  } catch {
+    // non-JSON body
+  }
+  return fallback;
 }
 
 const VerdictSchema = z.enum([
@@ -31,12 +51,7 @@ const VerdictSchema = z.enum([
   "Insufficient reviews",
 ]);
 
-const ConsensusStrengthSchema = z.enum([
-  "strong",
-  "moderate",
-  "mixed",
-  "split",
-]);
+const ConsensusStrengthSchema = z.enum(["strong", "moderate", "mixed", "split"]);
 
 export const PaperDetailSchema = z.object({
   id: z.string(),
@@ -78,135 +93,6 @@ export const PaperDetailSchema = z.object({
 
 export type PaperDetailDTO = z.infer<typeof PaperDetailSchema>;
 
-type CacheEntry<T> = {
-  expiresAt: number;
-  value: T;
-};
-
-function isBrowser() {
-  return typeof window !== "undefined";
-}
-
-function getSessionValue<T>(key: string, schema: z.ZodType<T>): T | null {
-  if (!isBrowser()) return null;
-  try {
-    const raw = window.sessionStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = z.object({ expiresAt: z.number(), value: schema }).parse(JSON.parse(raw));
-    if (parsed.expiresAt <= Date.now()) {
-      window.sessionStorage.removeItem(key);
-      return null;
-    }
-    return parsed.value;
-  } catch {
-    return null;
-  }
-}
-
-function setSessionValue<T>(key: string, value: T, ttlMs: number) {
-  if (!isBrowser()) return;
-  const entry: CacheEntry<T> = { expiresAt: Date.now() + ttlMs, value };
-  try {
-    window.sessionStorage.setItem(key, JSON.stringify(entry));
-  } catch {
-    // Ignore quota/security errors; caching is only an optimization.
-  }
-}
-
-function paperCacheKey(paperId: string) {
-  return `veros:paper:${encodeURIComponent(paperId)}:v1`;
-}
-
-function searchCacheKey(
-  query: string,
-  limit: number,
-  offset: number,
-  mode: "auto" | "topic" | "specific",
-  sort: SearchSortKey,
-) {
-  return `veros:search:${encodeURIComponent(JSON.stringify({ query, limit, offset, mode, sort }))}:v1`;
-}
-
-export const PaperStatusSchema = z.object({
-  paper_id: z.string(),
-  ingest: z.enum(["queued", "ready", "failed"]),
-  analysis: z.enum(["pending", "ready", "failed"]),
-});
-
-export type PaperStatusDTO = z.infer<typeof PaperStatusSchema>;
-
-/** Returns the full paper detail, a transient/permanent ingest state, or null on 404. */
-export async function fetchPaper(
-  paperId: string,
-  init?: RequestInit,
-): Promise<PaperDetailDTO | "queued" | "failed" | null> {
-  const res = await fetch(`${API_BASE_URL}/papers/${paperId}`, withReadTimeout({
-    cache: "no-store",
-    ...init,
-  }));
-  if (res.status === 404) return null;
-  if (res.status === 410) return "failed";
-  if (res.status === 202) return "queued";
-  if (!res.ok) {
-    throw new Error(`API error ${res.status} fetching ${paperId}`);
-  }
-  return PaperDetailSchema.parse(await res.json());
-}
-
-export function getCachedPaper(paperId: string): PaperDetailDTO | null {
-  return getSessionValue(paperCacheKey(paperId), PaperDetailSchema);
-}
-
-export function rememberPaper(paper: PaperDetailDTO) {
-  setSessionValue(paperCacheKey(paper.id), paper, PAPER_CACHE_TTL_MS);
-}
-
-export async function fetchPaperClient(
-  paperId: string,
-  opts: { refresh?: boolean; signal?: AbortSignal } = {},
-): Promise<PaperDetailDTO | "queued" | "failed" | null> {
-  if (!opts.refresh) {
-    const cached = getCachedPaper(paperId);
-    if (cached) return cached;
-  }
-
-  const result = await fetchPaper(paperId, opts.signal ? { signal: opts.signal } : undefined);
-  if (result && result !== "queued" && result !== "failed") {
-    rememberPaper(result);
-  }
-  return result;
-}
-
-export async function fetchPaperStatus(
-  paperId: string,
-): Promise<PaperStatusDTO> {
-  const res = await fetch(`${API_BASE_URL}/papers/${paperId}/status`, withReadTimeout({
-    cache: "no-store",
-  }));
-  if (!res.ok) {
-    throw new Error(`API error ${res.status} fetching status for ${paperId}`);
-  }
-  return PaperStatusSchema.parse(await res.json());
-}
-
-export async function analyzePaper(paperId: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/analyze`, {
-    method: "POST",
-  });
-  if (res.ok) return;
-
-  let detail = `AI summary failed ${res.status}`;
-  try {
-    const body = await res.json();
-    if (typeof body?.detail === "string" && body.detail.trim()) {
-      detail = body.detail;
-    }
-  } catch {
-    // Ignore non-JSON error bodies and keep the generic fallback.
-  }
-  throw new Error(detail);
-}
-
 export const PaperOutSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -227,6 +113,72 @@ export const PaperOutSchema = z.object({
 });
 
 export type PaperOutDTO = z.infer<typeof PaperOutSchema>;
+
+export const PaperStatusSchema = z.object({
+  paper_id: z.string(),
+  ingest: z.enum(["queued", "ready", "failed"]),
+  analysis: z.enum(["pending", "ready", "failed"]),
+});
+
+export type PaperStatusDTO = z.infer<typeof PaperStatusSchema>;
+
+/** Discriminated union — replaces the old 4-way string-or-DTO return type. */
+export type PaperFetchResult =
+  | { kind: "ready"; paper: PaperDetailDTO }
+  | { kind: "queued" }
+  | { kind: "failed" }
+  | { kind: "not_found" };
+
+export async function fetchPaper(
+  paperId: string,
+  init?: RequestInit,
+): Promise<PaperFetchResult> {
+  const res = await fetch(
+    `${API_BASE_URL}/papers/${encodeURIComponent(paperId)}`,
+    withTimeout({ cache: "no-store", ...init }),
+  );
+  if (res.status === 404) return { kind: "not_found" };
+  if (res.status === 410) return { kind: "failed" };
+  if (res.status === 202) return { kind: "queued" };
+  if (!res.ok) {
+    throw new Error(await readErrorDetail(res, `API error ${res.status} fetching ${paperId}`));
+  }
+  return { kind: "ready", paper: PaperDetailSchema.parse(await res.json()) };
+}
+
+export async function fetchPaperStatus(paperId: string): Promise<PaperStatusDTO> {
+  const res = await fetch(
+    `${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/status`,
+    withTimeout({ cache: "no-store" }),
+  );
+  if (!res.ok) {
+    throw new Error(`API error ${res.status} fetching status for ${paperId}`);
+  }
+  return PaperStatusSchema.parse(await res.json());
+}
+
+/** Bulk paper fetch (used by the saved/reading-list page — one round-trip for N ids). */
+export async function fetchPapersBatch(ids: string[]): Promise<PaperOutDTO[]> {
+  if (ids.length === 0) return [];
+  const res = await fetch(`${API_BASE_URL}/papers/batch`, withTimeout({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+    cache: "no-store",
+  }));
+  if (!res.ok) throw new Error(await readErrorDetail(res, `Batch API error ${res.status}`));
+  return z.array(PaperOutSchema).parse(await res.json());
+}
+
+export async function analyzePaper(paperId: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/analyze`,
+    { method: "POST" },
+  );
+  if (res.ok) return;
+  throw new Error(await readErrorDetail(res, `AI summary failed ${res.status}`));
+}
+
 export const LandingGraphNodeSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -251,6 +203,7 @@ export const LandingGraphSchema = z.object({
 });
 
 export type LandingGraphDTO = z.infer<typeof LandingGraphSchema>;
+
 export type SearchSortKey =
   | "relevance"
   | "score"
@@ -259,6 +212,8 @@ export type SearchSortKey =
   | "clarity"
   | "impact";
 
+export type SearchMode = "auto" | "topic" | "specific";
+
 const SearchPageSchema = z.object({
   results: z.array(PaperOutSchema),
   total: z.number(),
@@ -266,54 +221,11 @@ const SearchPageSchema = z.object({
 
 export type SearchPageDTO = z.infer<typeof SearchPageSchema>;
 
-export function rememberSearchPage(
-  query: string,
-  page: SearchPageDTO,
-  limit = 20,
-  offset = 0,
-  mode: "auto" | "topic" | "specific" = "auto",
-  sort: SearchSortKey = "score",
-) {
-  setSessionValue(
-    searchCacheKey(query, limit, offset, mode, sort),
-    page,
-    SEARCH_CACHE_TTL_MS,
-  );
-}
-
-export async function fetchSearch(
-  query: string,
-  limit = 20,
-  offset = 0,
-  mode: "auto" | "topic" | "specific" = "auto",
-  sort: SearchSortKey = "relevance",
-): Promise<PaperOutDTO[]> {
-  const params = new URLSearchParams({
-    q: query,
-    limit: String(limit),
-    offset: String(offset),
-    mode,
-    sort,
-  });
-  const res = await fetch(
-    `${API_BASE_URL}/search?${params}`,
-    withReadTimeout({ cache: "no-store" }),
-  );
-  if (!res.ok) {
-    throw new Error(`Search API error ${res.status}`);
-  }
-  return z.array(PaperOutSchema).parse(await res.json());
-}
-
 export async function fetchLandingGraph(init?: RequestInit): Promise<LandingGraphDTO | null> {
   try {
     const res = await fetch(
       `${API_BASE_URL}/landing/graph`,
-      withReadTimeout({
-        cache: "force-cache",
-        next: { revalidate: 600 },
-        ...init,
-      }, 10000),
+      withTimeout({ cache: "force-cache", next: { revalidate: 600 }, ...init }, 10_000),
     );
     if (!res.ok) return null;
     return LandingGraphSchema.parse(await res.json());
@@ -326,7 +238,7 @@ export async function fetchSearchPage(
   query: string,
   limit = 20,
   offset = 0,
-  mode: "auto" | "topic" | "specific" = "auto",
+  mode: SearchMode = "auto",
   sort: SearchSortKey = "relevance",
   init?: RequestInit,
 ): Promise<SearchPageDTO> {
@@ -339,29 +251,10 @@ export async function fetchSearchPage(
   });
   const res = await fetch(
     `${API_BASE_URL}/search/page?${params}`,
-    withReadTimeout({ cache: "no-store", ...init }),
+    withTimeout({ cache: "no-store", ...init }),
   );
-  if (!res.ok) {
-    throw new Error(`Search API error ${res.status}`);
-  }
+  if (!res.ok) throw new Error(`Search API error ${res.status}`);
   return SearchPageSchema.parse(await res.json());
-}
-
-export async function fetchSearchPageClient(
-  query: string,
-  limit = 20,
-  offset = 0,
-  mode: "auto" | "topic" | "specific" = "auto",
-  sort: SearchSortKey = "relevance",
-  signal?: AbortSignal,
-): Promise<SearchPageDTO> {
-  const key = searchCacheKey(query, limit, offset, mode, sort);
-  const cached = getSessionValue(key, SearchPageSchema);
-  if (cached) return cached;
-
-  const page = await fetchSearchPage(query, limit, offset, mode, sort, signal ? { signal } : undefined);
-  setSessionValue(key, page, SEARCH_CACHE_TTL_MS);
-  return page;
 }
 
 /** Live (debounced) topic-mode fuzzy search; pass an AbortSignal to cancel in-flight calls. */
@@ -371,23 +264,12 @@ export async function fetchSearchLive(
   signal?: AbortSignal,
 ): Promise<PaperOutDTO[]> {
   const params = new URLSearchParams({ q: query, mode: "topic", sort });
-  const res = await fetch(`${API_BASE_URL}/search?${params}`, withReadTimeout({
-    cache: "no-store",
-    signal,
-  }));
-  if (!res.ok) {
-    throw new Error(`Search API error ${res.status}`);
-  }
+  const res = await fetch(
+    `${API_BASE_URL}/search?${params}`,
+    withTimeout({ cache: "no-store", signal }),
+  );
+  if (!res.ok) throw new Error(`Search API error ${res.status}`);
   return z.array(PaperOutSchema).parse(await res.json());
-}
-
-export async function fetchSearchLiveClient(
-  query: string,
-  sort: SearchSortKey = "relevance",
-  signal?: AbortSignal,
-): Promise<PaperOutDTO[]> {
-  const page = await fetchSearchPageClient(query, 20, 0, "topic", sort, signal);
-  return page.results;
 }
 
 const LookupCandidateSchema = z.object({
@@ -410,32 +292,21 @@ export type SearchLookupResponse = z.infer<typeof SearchLookupResponseSchema>;
 
 /** Submit-time classifier: returns intent, optional matched paper id, and a result list. */
 export async function lookupSearch(query: string): Promise<SearchLookupResponse> {
-  const res = await fetch(`${API_BASE_URL}/search/lookup`, {
+  const res = await fetch(`${API_BASE_URL}/search/lookup`, withTimeout({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ q: query }),
     cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Search lookup API error ${res.status}`);
-  }
-  const response = SearchLookupResponseSchema.parse(await res.json());
-  rememberSearchPage(
-    query,
-    { results: response.results, total: response.results.length },
-    20,
-    0,
-    response.intent === "specific" ? "specific" : "topic",
-    "relevance",
-  );
-  return response;
+  }));
+  if (!res.ok) throw new Error(`Search lookup API error ${res.status}`);
+  return SearchLookupResponseSchema.parse(await res.json());
 }
 
 export async function fetchSearchCount(query: string): Promise<number> {
   const params = new URLSearchParams({ q: query });
   const res = await fetch(
     `${API_BASE_URL}/search/count?${params}`,
-    withReadTimeout({ cache: "no-store" }),
+    withTimeout({ cache: "no-store" }),
   );
   if (!res.ok) return 0;
   const data = z.object({ total: z.number() }).parse(await res.json());
@@ -472,16 +343,18 @@ export async function fetchAuthorRankings(
   if (query.trim()) params.set("q", query.trim());
   const res = await fetch(
     `${API_BASE_URL}/rankings/authors?${params}`,
-    withReadTimeout({ cache: "no-store", ...init }, RANKING_API_TIMEOUT_MS),
+    withTimeout({ cache: "no-store", ...init }, RANKING_TIMEOUT_MS),
   );
   if (!res.ok) throw new Error(`Rankings API error ${res.status}`);
   return z.array(AuthorRankingSchema).parse(await res.json());
 }
 
+/** Saved papers — server-backed via the demo user. */
+
 export async function fetchSaved(init?: RequestInit): Promise<PaperOutDTO[]> {
   const res = await fetch(
     `${API_BASE_URL}/saved`,
-    withReadTimeout({ cache: "no-store", ...init }),
+    withTimeout({ cache: "no-store", ...init }),
   );
   if (!res.ok) throw new Error(`Saved API error ${res.status}`);
   return z.array(PaperOutSchema).parse(await res.json());
@@ -491,65 +364,29 @@ export async function fetchSavedStatus(
   paperId: string,
   init?: RequestInit,
 ): Promise<boolean> {
-  if (isBrowser()) return getLocalSavedPaperIds().includes(paperId);
-
   const res = await fetch(
     `${API_BASE_URL}/saved/${encodeURIComponent(paperId)}`,
-    withReadTimeout({ cache: "no-store", ...init }),
+    withTimeout({ cache: "no-store", ...init }),
   );
   if (!res.ok) return false;
   const data = z.object({ saved: z.boolean() }).parse(await res.json());
   return data.saved;
 }
 
-export function getLocalSavedPaperIds(): string[] {
-  if (!isBrowser()) return [];
-  try {
-    const parsed = z.array(z.string()).parse(
-      JSON.parse(window.localStorage.getItem(SAVED_PAPER_IDS_KEY) ?? "[]"),
-    );
-    return [...new Set(parsed)];
-  } catch {
-    return [];
-  }
-}
-
-function setLocalSavedPaperIds(ids: string[]) {
-  if (!isBrowser()) return;
-  try {
-    window.localStorage.setItem(SAVED_PAPER_IDS_KEY, JSON.stringify([...new Set(ids)]));
-  } catch {
-    // Ignore localStorage write failures.
-  }
-}
-
-export async function fetchSavedStatusClient(paperId: string): Promise<boolean> {
-  return getLocalSavedPaperIds().includes(paperId);
-}
-
 export async function savePaper(paperId: string): Promise<void> {
-  if (isBrowser()) {
-    setLocalSavedPaperIds([paperId, ...getLocalSavedPaperIds()]);
-    return;
-  }
-
-  const res = await fetch(`${API_BASE_URL}/saved`, {
+  const res = await fetch(`${API_BASE_URL}/saved`, withTimeout({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ paper_id: paperId }),
-  });
+  }));
   if (!res.ok) throw new Error(`Save failed ${res.status}`);
 }
 
 export async function unsavePaper(paperId: string): Promise<void> {
-  if (isBrowser()) {
-    setLocalSavedPaperIds(getLocalSavedPaperIds().filter((id) => id !== paperId));
-    return;
-  }
-
-  const res = await fetch(`${API_BASE_URL}/saved/${encodeURIComponent(paperId)}`, {
-    method: "DELETE",
-  });
+  const res = await fetch(
+    `${API_BASE_URL}/saved/${encodeURIComponent(paperId)}`,
+    withTimeout({ method: "DELETE" }),
+  );
   if (!res.ok) throw new Error(`Unsave failed ${res.status}`);
 }
 
@@ -578,39 +415,6 @@ export const ExplorePathwaySchema = z.object({
 export type ExplorePathwayDTO = z.infer<typeof ExplorePathwaySchema>;
 export type ExplorePathwayItemDTO = z.infer<typeof ExplorePathwayItemSchema>;
 
-const EXPLORE_TIMEOUT_MS = 60_000;
-const EXPLORE_ORDER_TIMEOUT_MS = 8_000;
-
-function timeoutSignal(ms: number): AbortSignal | undefined {
-  if (typeof AbortSignal.timeout === "function") {
-    return AbortSignal.timeout(ms);
-  }
-  if (typeof AbortController === "undefined") return undefined;
-  const controller = new AbortController();
-  setTimeout(() => controller.abort(), ms);
-  return controller.signal;
-}
-
-function combineAbortSignals(signals: (AbortSignal | undefined)[]): AbortSignal | undefined {
-  const present = signals.filter((item): item is AbortSignal => item !== undefined);
-  if (present.length === 0) return undefined;
-  if (present.length === 1) return present[0];
-  if (typeof AbortSignal.any === "function") {
-    return AbortSignal.any(present);
-  }
-
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  for (const item of present) {
-    if (item.aborted) {
-      controller.abort();
-      return controller.signal;
-    }
-    item.addEventListener("abort", abort, { once: true });
-  }
-  return controller.signal;
-}
-
 export async function postExplorePath(
   topic: string,
   force = false,
@@ -619,75 +423,30 @@ export async function postExplorePath(
   const params = new URLSearchParams();
   if (force) params.set("force", "true");
   const url = `${API_BASE_URL}/pathways/explore${params.toString() ? `?${params}` : ""}`;
-  const init: RequestInit = {
+  const res = await fetch(url, withTimeout({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ topic, limit: 8 }),
     cache: "no-store",
-  };
-  init.signal = combineAbortSignals([signal, timeoutSignal(EXPLORE_TIMEOUT_MS)]);
-  const res = await fetch(url, init);
-  if (!res.ok) {
-    let detail = `Explore API error ${res.status}`;
-    try {
-      const body = await res.json();
-      if (typeof body?.detail === "string" && body.detail.trim()) {
-        detail = body.detail;
-      }
-    } catch {
-      // Ignore non-JSON error bodies.
-    }
-    throw new Error(detail);
-  }
+    signal,
+  }, EXPLORE_TIMEOUT_MS));
+  if (!res.ok) throw new Error(await readErrorDetail(res, `Explore API error ${res.status}`));
   return ExplorePathwaySchema.parse(await res.json());
 }
 
-export type LocalExploreOrderCandidate = {
-  paper_id: string;
-  title: string;
-  stage: string;
-  year: number | null;
-  veros_score: number | null;
-  tldr: string | null;
-  anchor_concepts: string[];
-};
-
-const LocalExploreOrderSchema = z.object({
-  rationale: z.string(),
-  model: z.string().nullable(),
-  items: z.array(
-    z.object({
-      paper_id: z.string(),
-      learning_step: z.number(),
-      why_now: z.string(),
-    }),
-  ),
-});
-
-export type LocalExploreOrderDTO = z.infer<typeof LocalExploreOrderSchema>;
-
-export async function postLocalExploreOrder(
-  topic: string,
-  candidates: LocalExploreOrderCandidate[],
-): Promise<LocalExploreOrderDTO> {
-  const res = await fetch(`${API_BASE_URL}/pathways/explore/order`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ topic, candidates }),
-    cache: "no-store",
-    signal: timeoutSignal(EXPLORE_ORDER_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    let detail = `Explore ordering API error ${res.status}`;
-    try {
-      const body = await res.json();
-      if (typeof body?.detail === "string" && body.detail.trim()) {
-        detail = body.detail;
-      }
-    } catch {
-      // Ignore non-JSON error bodies.
-    }
-    throw new Error(detail);
+/** Server-side stats for the landing footer. Returned by the API health/stats endpoint. */
+export async function fetchStats(init?: RequestInit): Promise<{ paper_count: number; review_count: number }> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/stats`,
+      withTimeout({ cache: "force-cache", next: { revalidate: 300 }, ...init }, 5_000),
+    );
+    if (!res.ok) return { paper_count: 0, review_count: 0 };
+    const data = z
+      .object({ paper_count: z.number(), review_count: z.number() })
+      .parse(await res.json());
+    return data;
+  } catch {
+    return { paper_count: 0, review_count: 0 };
   }
-  return LocalExploreOrderSchema.parse(await res.json());
 }

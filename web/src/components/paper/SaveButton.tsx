@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { VIcon } from "@/components/brand/VIcon";
-import { fetchSavedStatusClient, savePaper, unsavePaper } from "@/lib/api";
+import { fetchSavedStatus, savePaper, unsavePaper } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export function SaveButton({
@@ -17,13 +17,17 @@ export function SaveButton({
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    fetchSavedStatusClient(paperId).then(setSaved).catch(() => undefined);
+    const controller = new AbortController();
+    fetchSavedStatus(paperId, { signal: controller.signal })
+      .then(setSaved)
+      .catch(() => undefined);
+    return () => controller.abort();
   }, [paperId]);
 
   async function toggle() {
     if (busy) return;
     const next = !saved;
-    setSaved(next); // optimistic
+    setSaved(next);
     setBusy(true);
     try {
       if (next) {
@@ -34,7 +38,7 @@ export function SaveButton({
         toast.success("Removed from reading list");
       }
     } catch {
-      setSaved(!next); // revert
+      setSaved(!next);
       toast.error("Could not update reading list");
     } finally {
       setBusy(false);

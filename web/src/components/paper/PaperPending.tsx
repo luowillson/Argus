@@ -2,9 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { fetchPaperClient, fetchPaperStatus, PaperDetailDTO } from "@/lib/api";
+import { fetchPaper, fetchPaperStatus, type PaperDetailDTO } from "@/lib/api";
 import { adaptPaperDetail } from "@/lib/adapt";
-import { upsertLocalPaper } from "@/lib/localPapers";
 import { PaperView } from "./PaperView";
 
 type Phase = "ingesting" | "analyzing" | "loading";
@@ -15,10 +14,9 @@ const PHASE_LABELS: Record<Phase, string> = {
   loading: "Loading paper…",
 };
 
-const POLL_INTERVAL_MS = 5000;
-// 90s is enough for an OpenReview fetch + scoring + LLM analyze under normal
-// load. If we're still stuck after that, the worker has almost certainly
-// failed (id not found on either v1/v2, auth-gated venue, LLM down, etc.).
+const POLL_INTERVAL_MS = 5_000;
+// 90s covers an OpenReview fetch + scoring + LLM analyze under normal load. If
+// we're still stuck after that the worker has almost certainly failed.
 const POLL_TIMEOUT_MS = 90_000;
 
 export function PaperPending({ paperId }: { paperId: string }) {
@@ -28,7 +26,7 @@ export function PaperPending({ paperId }: { paperId: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const startedAt = Date.now();
 
     async function poll() {
@@ -47,20 +45,19 @@ export function PaperPending({ paperId }: { paperId: string }) {
 
         if (status.analysis === "ready" || status.ingest === "ready") {
           setPhase("loading");
-          const result = await fetchPaperClient(paperId, { refresh: true });
-          if (!cancelled && result && result !== "queued" && result !== "failed") {
+          const result = await fetchPaper(paperId);
+          if (!cancelled && result.kind === "ready") {
             toast.success(
               status.analysis === "ready"
                 ? "Paper analyzed — AI insights ready"
                 : "Paper ingested — score ready",
             );
-            upsertLocalPaper(result);
-            setDto(result);
+            setDto(result.paper);
             return;
           }
         }
       } catch {
-        // swallow transient poll errors; try again next tick
+        // swallow transient poll errors; next tick retries
       }
 
       if (Date.now() - startedAt >= POLL_TIMEOUT_MS) {
@@ -74,7 +71,7 @@ export function PaperPending({ paperId }: { paperId: string }) {
     poll();
     return () => {
       cancelled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     };
   }, [paperId]);
 
@@ -92,8 +89,7 @@ export function PaperPending({ paperId }: { paperId: string }) {
         <p className="mt-4 max-w-[640px] mx-auto font-sans text-[14px] leading-[1.6] text-prose">
           We tried to fetch{" "}
           <code className="font-mono text-[12px] text-muted">{paperId}</code>{" "}
-          from OpenReview but the ingest job failed. Most
-          common causes:
+          from OpenReview but the ingest job failed. Most common causes:
         </p>
         <ul className="mt-3 max-w-[640px] mx-auto space-y-1 text-left font-sans text-[13px] leading-[1.6] text-muted">
           <li>• The forum id doesn&rsquo;t exist on OpenReview.</li>

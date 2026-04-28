@@ -9,10 +9,12 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "postgresql+psycopg://veros:veros@localhost:5432/veros"
-    db_pool_size: int = 2
-    db_max_overflow: int = 0
+    db_pool_size: int = 10
+    db_max_overflow: int = 10
     db_pool_timeout: int = 10
     redis_url: str = "redis://localhost:6379/0"
+
+    debug: bool = False
 
     llm_provider: str = "gemini"  # "zai" | "gemini"
 
