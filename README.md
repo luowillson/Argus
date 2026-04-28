@@ -251,10 +251,10 @@ python scripts/parse_neurips_2025_accepted.py --limit 5
 
 ### Backend integration
 
-The reusable service API for the standalone tooling lives in `argus_openreview.service`:
+The reusable service API for the standalone tooling lives in `scoring.service`:
 
 ```python
-from argus_openreview.service import get_score_summary
+from scoring.service import get_score_summary
 
 payload = get_score_summary(
     title="Optimal Mistake Bounds for Transductive Online Learning",
@@ -275,18 +275,13 @@ The returned payload is JSON-safe and can be sent directly from a Flask, FastAPI
 DATABASE_URL=postgresql+psycopg://veros:veros@localhost:5432/veros
 REDIS_URL=redis://localhost:6379/0
 
-# LLM provider: "zai" or "gemini"
-LLM_PROVIDER=zai
+# LLM provider
+LLM_PROVIDER=gemini
 
-# Z.AI default
-ZAI_API_KEY=<your Z.AI key>
-ZAI_BASE_URL=https://api.z.ai/api/paas/v4/
-ZAI_MODEL=glm-4.6
-
-# Gemini optional alternative
+# Gemini (OpenAI-compatible mode)
 GEMINI_API_KEY=<your key from aistudio.google.com>
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3-flash-preview
 
 # OpenReview credentials, only needed for auth-gated venues
 OPENREVIEW_USERNAME=
@@ -347,15 +342,24 @@ Base: `http://localhost:8000/api/v1`
 |---|---|---|
 | GET | `/health` | Liveness check |
 | GET | `/stats` | Paper + review counts |
-| GET | `/search?q=&limit=&offset=` | Text + semantic search |
+| GET | `/landing/graph` | Cached semantic graph used on the landing page |
+| GET | `/search?q=&limit=&offset=&sort=&mode=` | Text + semantic search |
+| GET | `/search/page` | Same as `/search`, plus a `total` count for pagination |
+| GET | `/search/count?q=` | Result count only |
+| POST | `/search/lookup` | Submit-time intent classifier; pulls a missing paper from OpenReview when needed |
 | GET | `/papers/{id}` | Full paper detail; 202 + enqueue if not ingested |
 | GET | `/papers/{id}/status` | `{ingest, analysis}` status |
 | POST | `/papers/{id}/ingest` | Synchronous ingest |
 | POST | `/papers/{id}/analyze` | Re-run LLM analysis |
+| POST | `/papers/batch` | Fetch many papers by id in one query |
 | POST | `/pathways/from-paper/{id}` | Build or reuse a cached learning pathway for one paper |
 | POST | `/pathways/from-topic` | Build or reuse a cached learning pathway for a topic |
+| POST | `/pathways/explore` | Topic-driven explore path used by the `/explore` page |
+| POST | `/pathways/explore/order` | LLM-ordered local explore candidates |
 | GET | `/pathways/{id}` | Fetch a previously generated learning pathway |
+| GET | `/rankings/authors` | Author leaderboard by average Veros score |
 | GET | `/saved` | Demo user's reading list |
+| GET | `/saved/{id}` | Whether the paper is saved by the current user |
 | POST | `/saved` | Save a paper `{paper_id}` |
 | DELETE | `/saved/{id}` | Unsave a paper |
 
@@ -423,8 +427,8 @@ Both use an OpenAI-compatible HTTP interface. Adding a new provider requires imp
 The current default in `api/app/config.py` is:
 
 ```text
-LLM_PROVIDER=zai
-ZAI_MODEL=glm-4.6
+LLM_PROVIDER=gemini
+GEMINI_MODEL=gemini-3-flash-preview
 ```
 
 ---
@@ -433,10 +437,14 @@ ZAI_MODEL=glm-4.6
 
 | URL | Description |
 |---|---|
-| `/` | Landing page with search box and live stats |
-| `/search?q=` | Results grid |
-| `/papers/{id}` | Full paper view |
+| `/` | Landing page with search box, live stats, and semantic graph |
+| `/search?q=` | Results grid (paginated) |
+| `/papers/{id}` | Full paper view (with ingest pending state) |
 | `/saved` | Reading list |
+| `/explore?q=` | Learning-pathway view for a topic |
+| `/ranking` | Author leaderboard ranked by average Veros score |
+| `/ranking/worst` | Same leaderboard, ranked from lowest score |
+| `/ranking/search` | Author-name search inside the ranking view |
 
 ---
 

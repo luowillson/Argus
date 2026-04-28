@@ -62,7 +62,6 @@ Veros fetches official peer reviews from OpenReview, computes a deterministic **
 │       │   │   ├── provider.py       ← LLMProvider ABC
 │       │   │   ├── openai_compatible.py ← base implementation (openai SDK)
 │       │   │   ├── gemini.py         ← GeminiProvider (uses openai SDK + Gemini base_url)
-│       │   │   ├── zai.py            ← ZaiProvider
 │       │   │   ├── factory.py        ← make_llm_provider() reads LLM_PROVIDER env var
 │       │   │   └── prompts.py        ← SYSTEM_PROMPT, build_user_prompt()
 │       │   └── embeddings/
@@ -323,7 +322,7 @@ class LLMProvider(ABC):
 
 `JSONResponse` has `.text` (raw string), `.model`, `.input_tokens`, `.output_tokens`.
 
-Both `GeminiProvider` and `ZaiProvider` inherit from `OpenAICompatibleProvider` which uses the `openai` SDK with a custom `base_url`. Switching providers is a one-line `.env` change: `LLM_PROVIDER=gemini` or `LLM_PROVIDER=zai`. Adding a new provider: subclass `OpenAICompatibleProvider`, register in `factory.py`.
+`GeminiProvider` inherits from `OpenAICompatibleProvider` which uses the `openai` SDK with a custom `base_url`. To add a new provider: subclass `OpenAICompatibleProvider` and register in `factory.py`.
 
 The single LLM call (in `analyze.py`) returns structured JSON validated by `LLMInsightOut`:
 ```python
@@ -387,9 +386,8 @@ Defined in `api/app/config.py`:
 ```
 DATABASE_URL=postgresql+psycopg://veros:veros@localhost:5432/veros
 REDIS_URL=redis://localhost:6379/0
-LLM_PROVIDER=zai
-ZAI_MODEL=glm-4.6
-GEMINI_MODEL=gemini-2.5-flash
+LLM_PROVIDER=gemini
+GEMINI_MODEL=gemini-3-flash-preview
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 DEMO_USER_ID=demo-user
 DEMO_USER_EMAIL=demo@veros.local
