@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -206,7 +207,9 @@ def import_jsonl(
     limit: int | None,
     force: bool,
     chunk_size: int,
+    chunk_delay: float,
     score: bool,
+    score_delay: float,
 ) -> ImportStats:
     stats = ImportStats()
     engine = make_import_engine()
@@ -251,6 +254,8 @@ def import_jsonl(
                     f"{stats.imported_reviews} review(s)...",
                     flush=True,
                 )
+                if chunk_delay:
+                    time.sleep(chunk_delay)
 
         flush_chunk(db, paper_rows, review_rows)
 
@@ -262,6 +267,8 @@ def import_jsonl(
                 stats.scored_papers += 1
                 if stats.scored_papers % 100 == 0:
                     print(f"Scored {stats.scored_papers} paper(s)...", flush=True)
+                if score_delay:
+                    time.sleep(score_delay)
 
     return stats
 
@@ -279,6 +286,12 @@ def parse_args() -> argparse.Namespace:
         help="Number of papers to upsert per database transaction.",
     )
     parser.add_argument(
+        "--chunk-delay",
+        type=float,
+        default=0.0,
+        help="Seconds to sleep after each bulk database transaction.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Reimport and update papers that already exist in the database.",
@@ -288,17 +301,29 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Compute Veros scores after the fast paper/review upload.",
     )
+    parser.add_argument(
+        "--score-delay",
+        type=float,
+        default=0.0,
+        help="Seconds to sleep after each score write when --score is enabled.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.chunk_delay < 0:
+        raise ValueError("--chunk-delay cannot be negative.")
+    if args.score_delay < 0:
+        raise ValueError("--score-delay cannot be negative.")
     result = import_jsonl(
         Path(args.source),
         limit=args.limit,
         force=args.force,
         chunk_size=args.chunk_size,
+        chunk_delay=args.chunk_delay,
         score=args.score,
+        score_delay=args.score_delay,
     )
 
     print(
