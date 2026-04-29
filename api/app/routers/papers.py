@@ -57,7 +57,7 @@ def get_citations(
     paper_id: str,
     db: DbSession,
     direction: Literal["references"] = Query(default="references"),
-    limit: int = Query(default=60, ge=1, le=200),
+    limit: int = Query(default=200, ge=1, le=500),
 ) -> CitationGraph:
     resolved_id = parse_forum_id(paper_id)
     try:

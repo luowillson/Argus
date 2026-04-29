@@ -209,7 +209,7 @@ export async function fetchPaperCitations(
   paperId: string,
   init?: RequestInit,
 ): Promise<CitationGraphDTO> {
-  const params = new URLSearchParams({ direction: "references" });
+  const params = new URLSearchParams({ direction: "references", limit: "200" });
   const res = await fetch(
     `${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/citations?${params}`,
     withTimeout({ cache: "no-store", ...init }),

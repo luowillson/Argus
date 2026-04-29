@@ -304,7 +304,7 @@ def build_citation_graph(
     paper_id: str,
     *,
     direction: CitationDirection = "references",
-    limit: int = 60,
+    limit: int = 200,
 ) -> CitationGraph:
     if direction != "references":
         raise ValueError("only references direction is supported")

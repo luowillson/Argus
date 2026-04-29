@@ -71,17 +71,6 @@ class SemanticScholarProvider:
             "referenceCount",
             "externalIds",
             "url",
-            "references.paperId",
-            "references.corpusId",
-            "references.title",
-            "references.authors",
-            "references.year",
-            "references.venue",
-            "references.abstract",
-            "references.citationCount",
-            "references.referenceCount",
-            "references.externalIds",
-            "references.url",
         ]
     )
     _REFERENCE_FIELDS = ",".join(
@@ -146,9 +135,12 @@ class SemanticScholarProvider:
         if paper is None:
             return None
 
-        references = paper.get("references")
-        if not isinstance(references, list):
-            references = self._fetch_references(str(paper.get("paperId")), max_references)
+        # Always use the dedicated /references endpoint instead of inline
+        # references from the paper lookup.  The /paper/{id} response silently
+        # truncates the inline references list (often to <10 items), so papers
+        # with 100+ references would appear to have only a handful.
+        paper_id_str = str(paper.get("paperId") or "")
+        references = self._fetch_references(paper_id_str, max_references)
         external_seed = self._to_external_paper(paper)
         refs = [
             self._to_external_paper(ref)
