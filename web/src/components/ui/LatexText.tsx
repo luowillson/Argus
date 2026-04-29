@@ -1,5 +1,6 @@
 "use client";
 
+import { memo, useMemo } from "react";
 import { InlineMath, BlockMath } from "react-katex";
 
 type Segment =
@@ -7,7 +8,15 @@ type Segment =
   | { type: "inline"; value: string }
   | { type: "block"; value: string };
 
+const MATH_PROBE = /[$]/;
+
 function parse(text: string): Segment[] {
+  // Fast path: the vast majority of titles/TLDRs contain no math at all.
+  // Skip the regex, the segment array, and the fragment children entirely.
+  if (!MATH_PROBE.test(text)) {
+    return [{ type: "text", value: text }];
+  }
+
   const segments: Segment[] = [];
   // Match $$...$$ (block) before $...$ (inline) to avoid greedily eating delimiters.
   const re = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
@@ -33,10 +42,15 @@ function parse(text: string): Segment[] {
   return segments;
 }
 
-export function LatexText({ children }: { children: string }) {
-  if (!children) return null;
+function LatexTextImpl({ children }: { children: string }) {
+  const segments = useMemo(() => (children ? parse(children) : null), [children]);
 
-  const segments = parse(children);
+  if (!segments) return null;
+
+  // Fast path matches the parser fast path — render plain text directly.
+  if (segments.length === 1 && segments[0].type === "text") {
+    return <>{segments[0].value}</>;
+  }
 
   return (
     <>
@@ -56,3 +70,5 @@ export function LatexText({ children }: { children: string }) {
     </>
   );
 }
+
+export const LatexText = memo(LatexTextImpl);

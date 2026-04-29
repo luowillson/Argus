@@ -40,8 +40,9 @@ export function PaperPendingCard({ paperId, title, isFirst }: Props) {
       if (cancelled) return;
       try {
         const status = await fetchPaperStatus(paperId);
+        if (cancelled) return;
         if (status.ingest === "failed") {
-          if (!cancelled) setFailed(true);
+          setFailed(true);
           return;
         }
         if (status.ingest === "ready" && status.analysis === "pending") {
@@ -50,7 +51,8 @@ export function PaperPendingCard({ paperId, title, isFirst }: Props) {
         if (status.analysis === "ready" || status.ingest === "ready") {
           setPhase("loading");
           const result = await fetchPaper(paperId);
-          if (!cancelled && result.kind === "ready") {
+          if (cancelled) return;
+          if (result.kind === "ready") {
             setPaper(adaptPaperDetail(result.paper));
             return;
           }
@@ -58,8 +60,9 @@ export function PaperPendingCard({ paperId, title, isFirst }: Props) {
       } catch {
         // swallow transient poll errors; try again next tick
       }
+      if (cancelled) return;
       if (Date.now() - startedAt >= POLL_TIMEOUT_MS) {
-        if (!cancelled) setFailed(true);
+        setFailed(true);
         return;
       }
       timer = setTimeout(poll, POLL_INTERVAL_MS);

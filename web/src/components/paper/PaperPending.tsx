@@ -33,9 +33,10 @@ export function PaperPending({ paperId }: { paperId: string }) {
       if (cancelled) return;
       try {
         const status = await fetchPaperStatus(paperId);
+        if (cancelled) return;
 
         if (status.ingest === "failed") {
-          if (!cancelled) setFailed(true);
+          setFailed(true);
           return;
         }
 
@@ -46,7 +47,8 @@ export function PaperPending({ paperId }: { paperId: string }) {
         if (status.analysis === "ready" || status.ingest === "ready") {
           setPhase("loading");
           const result = await fetchPaper(paperId);
-          if (!cancelled && result.kind === "ready") {
+          if (cancelled) return;
+          if (result.kind === "ready") {
             toast.success(
               status.analysis === "ready"
                 ? "Paper analyzed — AI insights ready"
@@ -60,8 +62,9 @@ export function PaperPending({ paperId }: { paperId: string }) {
         // swallow transient poll errors; next tick retries
       }
 
+      if (cancelled) return;
       if (Date.now() - startedAt >= POLL_TIMEOUT_MS) {
-        if (!cancelled) setFailed(true);
+        setFailed(true);
         return;
       }
 
