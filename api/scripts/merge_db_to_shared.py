@@ -124,6 +124,11 @@ TABLES: tuple[TableSpec, ...] = (
         conflict_columns=("src_paper_id", "dst_paper_id", "edge_type"),
         jsonb_columns=frozenset({"edge_metadata"}),
     ),
+    TableSpec(
+        name="api_rate_limits",
+        columns=("provider", "last_request_at"),
+        conflict_columns=("provider",),
+    ),
 )
 
 

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Literal
 
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from app.config import get_settings
 from app.db.models import AIInsight, Paper, PaperEdge, PaperIdentifier, VerosScore
@@ -15,14 +17,13 @@ from app.schemas.paper import ConsensusStrength
 from app.services.citation_providers import (
     CitationFetchResult,
     CitationProviderError,
-    CrossrefProvider,
     ExternalPaper,
-    OpenAlexProvider,
     SemanticScholarProvider,
-    make_default_providers,
+    make_default_provider,
     normalize_arxiv,
     normalize_doi,
 )
+from app.services.citation_pdf import extract_openreview_reference_texts
 from app.services.dimensions import standardized_dimensions
 
 logger = logging.getLogger(__name__)
@@ -30,15 +31,13 @@ logger = logging.getLogger(__name__)
 SUPPORTED_IDENTIFIER_NAMESPACES = {
     "openreview",
     "semantic_scholar",
-    "openalex",
     "doi",
     "arxiv",
     "corpus_id",
-    "pmid",
-    "pmcid",
 }
 
 CitationDirection = Literal["references"]
+_SEMANTIC_SCHOLAR_LOCK_KEY = 8073042
 
 
 def citation_graph_status(paper: Paper) -> Literal["not_enriched", "enriched", "failed"]:
@@ -84,7 +83,7 @@ def enrich_paper_citations(
     db: Session,
     paper_id: str,
     *,
-    providers: tuple[SemanticScholarProvider, OpenAlexProvider, CrossrefProvider] | None = None,
+    provider: SemanticScholarProvider | None = None,
     max_references: int | None = None,
 ) -> dict[str, object]:
     paper = db.get(Paper, paper_id)
@@ -93,7 +92,9 @@ def enrich_paper_citations(
 
     settings = get_settings()
     max_refs = max_references or settings.citation_max_references
-    semantic, openalex, crossref = providers or make_default_providers()
+    semantic = provider or make_default_provider(
+        rate_limiter=lambda: _rate_limit_semantic_scholar(db)
+    )
 
     seed_ids = _identifiers_for_paper(db, paper_id)
     doi = normalize_doi(seed_ids.get("doi") or _extract_identifier_from_metadata(paper, "doi"))
@@ -102,46 +103,32 @@ def enrich_paper_citations(
     result: CitationFetchResult | None = None
     provider_used = ""
     provider_errors: list[str] = []
-    provider_order: tuple[tuple[str, SemanticScholarProvider | OpenAlexProvider], ...]
-    if settings.semantic_scholar_api_key:
-        provider_order = (("semantic_scholar", semantic), ("openalex", openalex))
-    elif doi or arxiv_id:
-        provider_order = (("openalex", openalex), ("semantic_scholar", semantic))
-    else:
-        # Anonymous Semantic Scholar title search shares a public rate-limit
-        # pool. Until Veros has a dedicated S2 key, do title-only resolution via
-        # OpenAlex and reserve anonymous S2 calls for exact DOI/arXiv lookups.
-        provider_order = (("openalex", openalex),)
+    try:
+        result = semantic.fetch(
+            title=paper.title,
+            authors=list(paper.authors or []),
+            year=paper.year,
+            doi=doi,
+            arxiv_id=arxiv_id,
+            max_references=max_refs,
+        )
+    except CitationProviderError as exc:
+        provider_errors.append(f"semantic_scholar: {exc}")
+        result = None
 
-    for provider_name, provider in provider_order:
-        try:
-            result = provider.fetch(
-                title=paper.title,
-                authors=list(paper.authors or []),
-                year=paper.year,
-                doi=doi,
-                arxiv_id=arxiv_id,
+    if result is not None:
+        provider_used = "semantic_scholar"
+        if not result.references and paper.openreview_url:
+            pdf_references = _resolve_openreview_pdf_references(
+                paper=paper,
+                semantic=semantic,
                 max_references=max_refs,
+                timeout=settings.citation_http_timeout,
             )
-        except CitationProviderError as exc:
-            provider_errors.append(f"{provider_name}: {exc}")
-            result = None
-        if result is None and not (
-            provider_errors and provider_errors[-1].startswith(f"{provider_name}:")
-        ):
-            provider_errors.append(f"{provider_name}: no confident match")
-            continue
-        if result is not None:
-            provider_used = provider_name
-            break
-
-    if result is None and doi:
-        fallback = crossref.lookup_doi(doi)
-        if fallback is not None:
-            result = CitationFetchResult(seed=fallback, references=[])
-            provider_used = "crossref"
-        else:
-            provider_errors.append("crossref: no DOI match")
+            if pdf_references:
+                result = CitationFetchResult(seed=result.seed, references=pdf_references)
+    else:
+        provider_errors.append("semantic_scholar: no confident match")
 
     if result is None:
         metadata = dict(paper.citation_metadata or {})
@@ -175,6 +162,13 @@ def enrich_paper_citations(
     upsert_paper_identifiers(db, paper_id, {"openreview": paper_id}, source="openreview")
 
     reference_ids: list[str] = []
+    if result.references:
+        db.exec(
+            delete(PaperEdge).where(
+                PaperEdge.src_paper_id == paper_id,
+                PaperEdge.edge_type == "cites",
+            )
+        )
     for reference in result.references[:max_refs]:
         ref_id = _upsert_external_paper(db, reference)
         reference_ids.append(ref_id)
@@ -211,6 +205,11 @@ def enrich_paper_citations(
         {
             "provider": provider_used,
             "reference_nodes_stored": len(reference_ids),
+            "reference_source": (
+                "semantic_scholar_or_pdf_resolved"
+                if reference_ids
+                else metadata.get("reference_source")
+            ),
             "last_enriched_at": now.isoformat(),
         }
     )
@@ -226,6 +225,78 @@ def enrich_paper_citations(
         "reference_count": len(reference_ids),
         "provider": provider_used,
     }
+
+
+def _resolve_openreview_pdf_references(
+    *,
+    paper: Paper,
+    semantic: SemanticScholarProvider,
+    max_references: int,
+    timeout: float,
+) -> list[ExternalPaper]:
+    reference_texts = extract_openreview_reference_texts(
+        paper_id=paper.id,
+        openreview_url=paper.openreview_url,
+        max_references=max_references,
+        timeout=timeout,
+    )
+    resolved: list[ExternalPaper] = []
+    seen_ids: set[tuple[str, str]] = set()
+    for reference_text in reference_texts:
+        external = semantic.resolve_reference_text(reference_text)
+        if external is None:
+            continue
+        identity = _external_identity(external)
+        if identity in seen_ids:
+            continue
+        seen_ids.add(identity)
+        resolved.append(external)
+    return resolved
+
+
+def _external_identity(external: ExternalPaper) -> tuple[str, str]:
+    for namespace in ("semantic_scholar", "corpus_id", "doi", "arxiv"):
+        value = external.external_ids.get(namespace)
+        if value:
+            return namespace, value
+    return "title", external.title.lower()
+
+
+def _rate_limit_semantic_scholar(db: Session) -> None:
+    """Reserve one Semantic Scholar request slot across API/worker processes."""
+    settings = get_settings()
+    interval = max(1.0, settings.semantic_scholar_min_interval_seconds)
+    db.execute(
+        sa_text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": _SEMANTIC_SCHOLAR_LOCK_KEY},
+    )
+    row = db.execute(
+        sa_text(
+            """
+            SELECT GREATEST(
+                0,
+                :interval - EXTRACT(EPOCH FROM (clock_timestamp() - last_request_at))
+            ) AS wait_seconds
+            FROM api_rate_limits
+            WHERE provider = 'semantic_scholar'
+            """
+        ),
+        {"interval": interval},
+    ).first()
+    wait_seconds = float(row[0]) if row and row[0] is not None else 0.0
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
+    db.execute(
+        sa_text(
+            """
+            INSERT INTO api_rate_limits (provider, last_request_at)
+            VALUES ('semantic_scholar', clock_timestamp())
+            ON CONFLICT (provider)
+            DO UPDATE SET last_request_at = EXCLUDED.last_request_at
+            """
+        )
+    )
+    db.commit()
 
 
 def build_citation_graph(
@@ -431,8 +502,6 @@ def _local_external_paper_id(external: ExternalPaper) -> str:
     ids = external.external_ids
     if ids.get("semantic_scholar"):
         return f"s2:{ids['semantic_scholar']}"
-    if ids.get("openalex"):
-        return f"oa:{ids['openalex']}"
     if ids.get("corpus_id"):
         return f"corpus:{ids['corpus_id']}"
     if ids.get("doi"):
@@ -448,7 +517,5 @@ def _normalize_identifier(namespace: str, value: str) -> str | None:
         return normalize_doi(value)
     if namespace == "arxiv":
         return normalize_arxiv(value)
-    if namespace == "openalex":
-        return value.removeprefix("https://openalex.org/").strip() or None
     stripped = str(value).strip()
     return stripped or None

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 
@@ -115,9 +115,16 @@ class SemanticScholarProvider:
         ]
     )
 
-    def __init__(self, *, api_key: str = "", timeout: float = 12.0) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str = "",
+        timeout: float = 12.0,
+        rate_limiter: Callable[[], None] | None = None,
+    ) -> None:
         headers = {"x-api-key": api_key} if api_key else {}
         self._client = httpx.Client(timeout=timeout, headers=headers)
+        self._rate_limiter = rate_limiter
 
     def fetch(
         self,
@@ -201,12 +208,27 @@ class SemanticScholarProvider:
             params={"fields": self._REFERENCE_FIELDS, "limit": limit},
             allow_404=True,
         )
-        rows = data.get("data", []) if isinstance(data, dict) else []
+        rows = (data.get("data") or []) if isinstance(data, dict) else []
         out: list[dict[str, Any]] = []
         for row in rows:
             if isinstance(row, dict) and isinstance(row.get("citedPaper"), dict):
                 out.append(row["citedPaper"])
         return out
+
+    def resolve_reference_text(self, reference_text: str) -> ExternalPaper | None:
+        query = _reference_title_candidate(reference_text) or " ".join(reference_text.split())
+        if len(query) < 30:
+            return None
+        data = self._get_json(
+            f"{self.base_url}/paper/search",
+            params={"query": query[:300], "limit": 5, "fields": self._SEARCH_FIELDS},
+            allow_404=True,
+        )
+        candidates = (data.get("data") or []) if isinstance(data, dict) else []
+        best = _best_reference_match(query, candidates)
+        if best is None:
+            return None
+        return self._to_external_paper(best)
 
     def _get_json(
         self,
@@ -216,6 +238,8 @@ class SemanticScholarProvider:
         allow_404: bool = False,
     ) -> dict[str, Any] | None:
         try:
+            if self._rate_limiter is not None:
+                self._rate_limiter()
             res = self._client.get(url, params=params)
             if allow_404 and res.status_code == 404:
                 return None
@@ -248,195 +272,14 @@ class SemanticScholarProvider:
         )
 
 
-class OpenAlexProvider:
-    base_url = "https://api.openalex.org"
-
-    _WORK_FIELDS = ",".join(
-        [
-            "id",
-            "doi",
-            "display_name",
-            "publication_year",
-            "cited_by_count",
-            "referenced_works_count",
-            "referenced_works",
-            "authorships",
-            "primary_location",
-            "abstract_inverted_index",
-            "ids",
-        ]
-    )
-
-    def __init__(
-        self,
-        *,
-        api_key: str = "",
-        mailto: str = "",
-        timeout: float = 12.0,
-    ) -> None:
-        self._client = httpx.Client(timeout=timeout)
-        self._api_key = api_key
-        self._mailto = mailto
-
-    def fetch(
-        self,
-        *,
-        title: str,
-        authors: list[str],
-        year: int | None,
-        doi: str | None,
-        arxiv_id: str | None,
-        max_references: int,
-    ) -> CitationFetchResult | None:
-        paper = self._resolve_paper(
-            title=title,
-            authors=authors,
-            year=year,
-            doi=doi,
-            arxiv_id=arxiv_id,
-        )
-        if paper is None:
-            return None
-        refs = []
-        for ref_id in (paper.get("referenced_works") or [])[:max_references]:
-            if not isinstance(ref_id, str):
-                continue
-            ref = self._get_work(ref_id)
-            if ref is not None:
-                refs.append(self._to_external_paper(ref))
-        return CitationFetchResult(seed=self._to_external_paper(paper), references=refs)
-
-    def _resolve_paper(
-        self,
-        *,
-        title: str,
-        authors: list[str],
-        year: int | None,
-        doi: str | None,
-        arxiv_id: str | None,
-    ) -> dict[str, Any] | None:
-        if doi:
-            work = self._get_work(f"doi:{doi}")
-            if work is not None:
-                return work
-        if arxiv_id:
-            work = self._get_work(f"arxiv:{arxiv_id}")
-            if work is not None:
-                return work
-        data = self._get_json(
-            f"{self.base_url}/works",
-            params={"search": title, "per_page": 5, "select": self._WORK_FIELDS},
-        )
-        candidates = data.get("results", []) if isinstance(data, dict) else []
-        return _best_title_author_match(title, authors, year, candidates)
-
-    def _get_work(self, work_id: str) -> dict[str, Any] | None:
-        normalized_id = work_id.removeprefix("https://openalex.org/")
-        return self._get_json(
-            f"{self.base_url}/works/{quote(normalized_id, safe=':')}",
-            params={"select": self._WORK_FIELDS},
-        )
-
-    def _get_json(self, url: str, *, params: dict[str, object]) -> dict[str, Any] | None:
-        full_params = dict(params)
-        if self._api_key:
-            full_params["api_key"] = self._api_key
-        if self._mailto:
-            full_params["mailto"] = self._mailto
-        try:
-            res = self._client.get(url, params=full_params)
-            if res.status_code == 404:
-                return None
-            res.raise_for_status()
-            data = res.json()
-            return data if isinstance(data, dict) else None
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 429:
-                raise CitationProviderError("OpenAlex rate limit") from exc
-            logger.info("OpenAlex lookup failed: %s", exc)
-            return None
-        except Exception as exc:
-            logger.info("OpenAlex lookup failed: %s", exc)
-            return None
-
-    @staticmethod
-    def _to_external_paper(data: dict[str, Any]) -> ExternalPaper:
-        ids = dict(data.get("ids") or {})
-        if data.get("doi"):
-            ids["doi"] = data["doi"]
-        if data.get("id"):
-            ids["openalex"] = data["id"]
-        location = data.get("primary_location") or {}
-        provider_url = location.get("landing_page_url") if isinstance(location, dict) else None
-        return ExternalPaper(
-            title=str(data.get("display_name") or data.get("title") or "").strip(),
-            authors=_openalex_author_names(data.get("authorships")),
-            year=_as_int(data.get("publication_year")),
-            venue=_openalex_venue(data.get("primary_location")),
-            abstract=_abstract_from_inverted_index(data.get("abstract_inverted_index")),
-            citations=_as_int(data.get("cited_by_count")),
-            references_count=_as_int(data.get("referenced_works_count")),
-            provider="openalex",
-            provider_url=_as_nonempty_str(provider_url),
-            external_ids=_openalex_external_ids(ids),
-        )
-
-
-class CrossrefProvider:
-    base_url = "https://api.crossref.org"
-
-    def __init__(self, *, mailto: str = "", timeout: float = 12.0) -> None:
-        self._client = httpx.Client(timeout=timeout)
-        self._mailto = mailto
-
-    def lookup_doi(self, doi: str) -> ExternalPaper | None:
-        params = {"mailto": self._mailto} if self._mailto else {}
-        try:
-            res = self._client.get(f"{self.base_url}/works/{doi}", params=params)
-            if res.status_code == 404:
-                return None
-            res.raise_for_status()
-            body = res.json()
-            message = body.get("message") if isinstance(body, dict) else None
-            if not isinstance(message, dict):
-                return None
-            title = _first(message.get("title"))
-            if not title:
-                return None
-            year = _crossref_year(message)
-            return ExternalPaper(
-                title=title,
-                authors=_crossref_authors(message.get("author")),
-                year=year,
-                venue=_first(message.get("container-title")),
-                abstract=_as_nonempty_str(message.get("abstract")),
-                citations=_as_int(message.get("is-referenced-by-count")),
-                references_count=_as_int(message.get("references-count")),
-                provider="crossref",
-                provider_url=_as_nonempty_str(message.get("URL")),
-                external_ids={"doi": doi},
-            )
-        except Exception as exc:
-            logger.info("Crossref lookup failed: %s", exc)
-            return None
-
-
-def make_default_providers() -> tuple[SemanticScholarProvider, OpenAlexProvider, CrossrefProvider]:
+def make_default_provider(
+    rate_limiter: Callable[[], None] | None = None,
+) -> SemanticScholarProvider:
     settings = get_settings()
-    return (
-        SemanticScholarProvider(
-            api_key=settings.semantic_scholar_api_key,
-            timeout=settings.citation_http_timeout,
-        ),
-        OpenAlexProvider(
-            api_key=settings.openalex_api_key,
-            mailto=settings.crossref_mailto,
-            timeout=settings.citation_http_timeout,
-        ),
-        CrossrefProvider(
-            mailto=settings.crossref_mailto,
-            timeout=settings.citation_http_timeout,
-        ),
+    return SemanticScholarProvider(
+        api_key=settings.semantic_scholar_api_key,
+        timeout=settings.citation_http_timeout,
+        rate_limiter=rate_limiter,
     )
 
 
@@ -457,14 +300,6 @@ def _semantic_external_ids(data: dict[str, Any]) -> dict[str, str]:
     return _normalize_external_ids(out)
 
 
-def _openalex_external_ids(raw: dict[str, Any]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for key in ("openalex", "doi", "pmid", "pmcid"):
-        if raw.get(key):
-            out[key] = str(raw[key])
-    return _normalize_external_ids(out)
-
-
 def _normalize_external_ids(ids: dict[str, str]) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, value in ids.items():
@@ -476,8 +311,6 @@ def _normalize_external_ids(ids: dict[str, str]) -> dict[str, str]:
             normalized = normalize_arxiv(value)
             if normalized:
                 out["arxiv"] = normalized
-        elif key == "openalex":
-            out["openalex"] = value.removeprefix("https://openalex.org/")
         else:
             out[key] = value
     return out
@@ -491,45 +324,6 @@ def _author_names(value: object) -> list[str]:
         if isinstance(item, dict) and item.get("name"):
             names.append(str(item["name"]))
     return names
-
-
-def _openalex_author_names(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    names = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        author = item.get("author")
-        if isinstance(author, dict) and author.get("display_name"):
-            names.append(str(author["display_name"]))
-        elif item.get("raw_author_name"):
-            names.append(str(item["raw_author_name"]))
-    return names
-
-
-def _openalex_venue(value: object) -> str | None:
-    if not isinstance(value, dict):
-        return None
-    source = value.get("source")
-    if isinstance(source, dict) and source.get("display_name"):
-        return str(source["display_name"])
-    return None
-
-
-def _abstract_from_inverted_index(value: object) -> str | None:
-    if not isinstance(value, dict):
-        return None
-    positions: list[tuple[int, str]] = []
-    for word, raw_positions in value.items():
-        if not isinstance(raw_positions, list):
-            continue
-        for pos in raw_positions:
-            if isinstance(pos, int):
-                positions.append((pos, str(word)))
-    if not positions:
-        return None
-    return " ".join(word for _, word in sorted(positions))
 
 
 def _best_title_author_match(
@@ -546,15 +340,13 @@ def _best_title_author_match(
     for item in candidates:
         if not isinstance(item, dict):
             continue
-        candidate_title = str(item.get("title") or item.get("display_name") or "")
+        candidate_title = str(item.get("title") or "")
         if not candidate_title:
             continue
         title_score = _jaccard(normalized_title, _fingerprint(candidate_title))
-        candidate_year = _as_int(item.get("year") or item.get("publication_year"))
+        candidate_year = _as_int(item.get("year"))
         year_score = 0.1 if year and candidate_year and abs(year - candidate_year) <= 1 else 0.0
-        candidate_authors = _author_names(item.get("authors")) or _openalex_author_names(
-            item.get("authorships")
-        )
+        candidate_authors = _author_names(item.get("authors"))
         candidate_author_tokens = {_last_name(name) for name in candidate_authors if _last_name(name)}
         author_score = 0.0
         if author_tokens and candidate_author_tokens:
@@ -565,6 +357,45 @@ def _best_title_author_match(
     if best is None or best[0] < 0.72:
         return None
     return best[1]
+
+
+def _best_reference_match(reference_text: str, candidates: object) -> dict[str, Any] | None:
+    if not isinstance(candidates, list):
+        return None
+    reference_tokens = _fingerprint(reference_text)
+    best: tuple[float, dict[str, Any]] | None = None
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "")
+        title_tokens = _fingerprint(title)
+        if len(title_tokens) < 3:
+            continue
+        overlap = len(title_tokens.intersection(reference_tokens)) / len(title_tokens)
+        jaccard = _jaccard(title_tokens, reference_tokens)
+        score = overlap + jaccard
+        if best is None or score > best[0]:
+            best = (score, item)
+    if best is None or best[0] < 0.78:
+        return None
+    return best[1]
+
+
+def _reference_title_candidate(reference_text: str) -> str | None:
+    text = " ".join(reference_text.split())
+    parts = [part.strip() for part in text.split(". ") if part.strip()]
+    if len(parts) < 2:
+        return None
+    for part in parts[1:4]:
+        lowered = part.lower()
+        if len(part) < 20:
+            continue
+        if lowered.startswith(("in ", "arxiv", "proceedings", "journal", "ieee", "acm")):
+            continue
+        if re.search(r"\b(19|20)\d{2}\b", part):
+            continue
+        return part
+    return None
 
 
 def _fingerprint(value: str) -> set[str]:
@@ -596,40 +427,3 @@ def _as_nonempty_str(value: object) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
-
-
-def _first(value: object) -> str | None:
-    if isinstance(value, list) and value:
-        return _as_nonempty_str(value[0])
-    return _as_nonempty_str(value)
-
-
-def _crossref_authors(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    names = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        given = str(item.get("given") or "").strip()
-        family = str(item.get("family") or "").strip()
-        name = " ".join(part for part in (given, family) if part)
-        if name:
-            names.append(name)
-    return names
-
-
-def _crossref_year(message: dict[str, Any]) -> int | None:
-    for key in ("published-print", "published-online", "published", "issued"):
-        raw = message.get(key)
-        if not isinstance(raw, dict):
-            continue
-        date_parts = raw.get("date-parts")
-        if (
-            isinstance(date_parts, list)
-            and date_parts
-            and isinstance(date_parts[0], list)
-            and date_parts[0]
-        ):
-            return _as_int(date_parts[0][0])
-    return None

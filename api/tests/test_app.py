@@ -149,6 +149,30 @@ def test_citation_provider_normalizes_external_ids() -> None:
     assert paper.citations == 12
 
 
+def test_semantic_scholar_references_allows_null_data() -> None:
+    from app.services.citation_providers import SemanticScholarProvider
+
+    provider = SemanticScholarProvider()
+    provider._get_json = lambda *args, **kwargs: {"data": None}  # type: ignore[method-assign]
+
+    assert provider._fetch_references("paper-id", 5) == []
+
+
+def test_pdf_reference_split_removes_page_number_boundaries() -> None:
+    from app.services.citation_pdf import _split_reference_entries
+
+    section = (
+        "Alice Example. First useful paper. arXiv preprint arXiv:2401.1, "
+        "2024. 10 Bob Example. Second useful paper. In Conference, 2023."
+    )
+
+    entries = _split_reference_entries(section, 5)
+
+    assert len(entries) == 2
+    assert entries[0].startswith("Alice Example")
+    assert entries[1].startswith("Bob Example")
+
+
 def test_landing_graph_falls_back_when_no_rows() -> None:
     from app.services.landing_graph import build_landing_graph
 

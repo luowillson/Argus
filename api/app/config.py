@@ -26,10 +26,9 @@ class Settings(BaseSettings):
     openreview_password: str = ""
 
     semantic_scholar_api_key: str = ""
-    openalex_api_key: str = ""
-    crossref_mailto: str = ""
-    citation_max_references: int = 60
+    citation_max_references: int = 150
     citation_http_timeout: float = 12.0
+    semantic_scholar_min_interval_seconds: float = 1.05
 
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
