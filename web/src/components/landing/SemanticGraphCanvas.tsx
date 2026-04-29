@@ -71,6 +71,9 @@ type GraphSceneState = {
   hoveredId: string | null;
   animationFrame: number;
   destroyed: boolean;
+  pointerDirty: boolean;
+  visible: boolean;
+  documentVisible: boolean;
 };
 
 export function SemanticGraphCanvas({ graph }: Props) {
@@ -93,7 +96,7 @@ export function SemanticGraphCanvas({ graph }: Props) {
       powerPreference: "high-performance",
     });
     renderer.setClearColor(0x000000, 0);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(42, WIDTH / HEIGHT, 1, 2200);
@@ -119,6 +122,10 @@ export function SemanticGraphCanvas({ graph }: Props) {
       hoveredId: null,
       animationFrame: 0,
       destroyed: false,
+      pointerDirty: false,
+      visible: true,
+      documentVisible:
+        typeof document !== "undefined" ? !document.hidden : true,
     };
     sceneStateRef.current = state;
 
@@ -132,36 +139,89 @@ export function SemanticGraphCanvas({ graph }: Props) {
 
     const render = (now: number) => {
       if (state.destroyed) return;
+
+      // Pause when off-screen or the tab is hidden — saves CPU/GPU/battery.
+      if (!state.visible || !state.documentVisible) {
+        state.animationFrame = 0;
+        return;
+      }
+
       state.animationFrame = window.requestAnimationFrame(render);
-      resize();
 
       const time = now * 0.001;
       group.rotation.y = time * 0.1;
       group.rotation.x = -0.1 + Math.sin(time * 0.24) * 0.085;
       group.rotation.z = Math.sin(time * 0.16) * 0.03;
-      group.updateMatrixWorld();
 
       const pointer = pointerRef.current;
       if (pointer) {
-        state.pointer.set(pointer.x, pointer.y);
-        state.raycaster.setFromCamera(state.pointer, camera);
-        const hit = state.raycaster.intersectObject(state.hitMesh, false)[0];
-        const nextId =
-          hit?.instanceId == null ? null : (layout.nodes[hit.instanceId]?.id ?? null);
-        applyHover(state, nextId, hoveredIdRef, setHoveredNode);
-      } else {
+        // Raycasting is expensive; only run it when the pointer actually moves
+        // or when we still have a hover to clear.
+        if (state.pointerDirty || state.hoveredId !== null) {
+          state.pointer.set(pointer.x, pointer.y);
+          state.raycaster.setFromCamera(state.pointer, camera);
+          const hit = state.raycaster.intersectObject(state.hitMesh, false)[0];
+          const nextId =
+            hit?.instanceId == null ? null : (layout.nodes[hit.instanceId]?.id ?? null);
+          applyHover(state, nextId, hoveredIdRef, setHoveredNode);
+          state.pointerDirty = false;
+        }
+      } else if (state.hoveredId !== null) {
         applyHover(state, null, hoveredIdRef, setHoveredNode);
       }
 
       renderer.render(scene, camera);
     };
 
+    const startRenderLoop = () => {
+      if (state.destroyed) return;
+      if (!state.visible || !state.documentVisible) return;
+      if (state.animationFrame !== 0) return;
+      state.animationFrame = window.requestAnimationFrame(render);
+    };
+
+    // Keep the canvas size in sync without forcing a layout read every frame.
+    const resizeObserver = new ResizeObserver(() => {
+      if (state.destroyed) return;
+      resize();
+      // If we're paused and a layout change happens, render one frame so the
+      // canvas doesn't go stale.
+      if (state.animationFrame === 0 && !state.destroyed) {
+        renderer.render(scene, camera);
+      }
+    });
+    resizeObserver.observe(canvas);
+
+    // Pause animation when the canvas scrolls out of view.
+    const intersectionObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          state.visible = entry.isIntersecting;
+        }
+        if (state.visible) startRenderLoop();
+      },
+      { threshold: 0 },
+    );
+    intersectionObserver.observe(canvas);
+
+    // Pause animation when the user switches tabs / minimizes the window.
+    const handleVisibilityChange = () => {
+      state.documentVisible = !document.hidden;
+      if (state.documentVisible) startRenderLoop();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     resize();
-    state.animationFrame = window.requestAnimationFrame(render);
+    startRenderLoop();
 
     return () => {
       state.destroyed = true;
-      window.cancelAnimationFrame(state.animationFrame);
+      if (state.animationFrame !== 0) {
+        window.cancelAnimationFrame(state.animationFrame);
+      }
+      resizeObserver.disconnect();
+      intersectionObserver.disconnect();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       sceneStateRef.current = null;
       hoveredIdRef.current = null;
       setHoveredNode(null);
@@ -174,6 +234,7 @@ export function SemanticGraphCanvas({ graph }: Props) {
       disposeMaterial(objects.edgeLines.material);
       disposeMaterial(objects.activeLines.material);
       renderer.dispose();
+      renderer.forceContextLoss();
     };
   }, [layout]);
 
@@ -189,12 +250,17 @@ export function SemanticGraphCanvas({ graph }: Props) {
       x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
       y: -(((event.clientY - rect.top) / rect.height) * 2 - 1),
     };
+    const state = sceneStateRef.current;
+    if (state) state.pointerDirty = true;
   }
 
   function handlePointerLeave() {
     pointerRef.current = null;
     const state = sceneStateRef.current;
-    if (state) applyHover(state, null, hoveredIdRef, setHoveredNode);
+    if (state) {
+      state.pointerDirty = false;
+      applyHover(state, null, hoveredIdRef, setHoveredNode);
+    }
   }
 
   function handleClick() {

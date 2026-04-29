@@ -15,12 +15,12 @@ import argparse
 import json
 from pathlib import Path
 
-from argus_openreview.formatting import (
+from scoring.formatting import (
     format_json,
     format_markdown,
     format_scores_text_payload,
 )
-from argus_openreview.service import (
+from scoring.service import (
     add_score_scale,
     add_score_scales,
     cache_parsed_scores,
@@ -30,7 +30,7 @@ from argus_openreview.service import (
     list_score_scales,
     list_title_matches,
 )
-from argus_openreview.storage import DEFAULT_SCORE_CACHE_PATH, DEFAULT_SCORE_DB_PATH
+from scoring.storage import DEFAULT_SCORE_CACHE_PATH, DEFAULT_SCORE_DB_PATH
 
 
 def parse_args() -> argparse.Namespace:

@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import Link from "next/link";
 import type { Paper } from "@/lib/types";
 import { cn, scoreColor } from "@/lib/utils";
@@ -13,7 +14,7 @@ type Props = {
   saved?: boolean;
 };
 
-export function ResultRow({ paper, isFirst, saved = false }: Props) {
+function ResultRowImpl({ paper, isFirst, saved = false }: Props) {
   const dest = `/papers/${paper.id}`;
   const score = paper.score;
 
@@ -93,3 +94,5 @@ export function ResultRow({ paper, isFirst, saved = false }: Props) {
     </div>
   );
 }
+
+export const ResultRow = memo(ResultRowImpl);

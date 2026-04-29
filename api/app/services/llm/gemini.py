@@ -2,9 +2,10 @@
 Z.AI is just a base_url + model change.
 
 Endpoint: https://generativelanguage.googleapis.com/v1beta/openai/
-Default model: gemma-4-31b-it. Gemma models emit <thought> reasoning blocks and
-do not support response_format=json_object — the provider auto-disables JSON
-mode and parsers downstream strip the reasoning tags.
+Default model: gemini-3-flash-preview. Gemma models (when configured) emit
+<thought> reasoning blocks and do not support response_format=json_object —
+the provider auto-disables JSON mode for any ``gemma*`` model name and parsers
+downstream strip the reasoning tags.
 """
 
 from __future__ import annotations

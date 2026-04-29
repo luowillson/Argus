@@ -16,11 +16,7 @@ class Settings(BaseSettings):
 
     debug: bool = False
 
-    llm_provider: str = "gemini"  # "zai" | "gemini"
-
-    zai_api_key: str = ""
-    zai_base_url: str = "https://api.z.ai/api/paas/v4/"
-    zai_model: str = "glm-4.6"
+    llm_provider: str = "gemini"
 
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
