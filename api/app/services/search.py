@@ -20,6 +20,7 @@ from sqlmodel import Session, select
 from app.config import get_settings
 from app.db.models import AIInsight, Paper, VerosScore
 from app.schemas.paper import ConsensusStrength, PaperOut, Verdict
+from app.services.citations import citation_graph_status
 from app.services.dimensions import standardized_dimensions
 
 logger = logging.getLogger(__name__)
@@ -311,6 +312,10 @@ def build_paper_out(
         title=paper.title,
         authors=", ".join(paper.authors) if paper.authors else "Unknown",
         venue=paper.venue,
+        citations=paper.citations,
+        references_count=paper.references_count,
+        citation_graph_status=citation_graph_status(paper),
+        openreview_url=paper.openreview_url,
         acceptance=paper.acceptance,
         score=float(score_row.score) if score_row else None,
         grade=score_row.grade if score_row else "—",

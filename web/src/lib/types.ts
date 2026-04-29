@@ -3,7 +3,8 @@ export type Verdict =
   | "Accept"
   | "Weak Accept"
   | "Borderline"
-  | "Reject";
+  | "Reject"
+  | "Insufficient reviews";
 
 export interface ReviewerVoice {
   handle: string;
@@ -20,6 +21,9 @@ export interface Paper {
   tldr: string;
   venue: string;
   citations: number;
+  referencesCount: number | null;
+  citationGraphStatus: "not_enriched" | "enriched" | "failed";
+  openreviewUrl?: string | null;
   score: number | null;
   grade: string;
   verdict: Verdict;

@@ -20,6 +20,8 @@ from app.services.openreview_client import (
     FetchedReview,
     fetch_paper_and_reviews,
 )
+from app.services.citations import upsert_paper_identifiers
+from app.services.citation_providers import normalize_arxiv, normalize_doi
 from app.services.scoring import compute_and_store_score
 from app.utils.ratings import parse_numeric, parse_recommendation
 
@@ -38,9 +40,11 @@ def _upsert_paper(db: Session, paper: FetchedPaper) -> None:
         venue=paper.venue,
         year=paper.publication_date.year if paper.publication_date else None,
         citations=None,
+        references_count=None,
         abstract=paper.abstract,
         openreview_url=_openreview_url(paper.id),
         acceptance=paper.acceptance,
+        citation_metadata={},
         ingested_at=datetime.now(tz=UTC),
         analyzed_at=None,
     )
@@ -53,10 +57,34 @@ def _upsert_paper(db: Session, paper: FetchedPaper) -> None:
             "year": stmt.excluded.year,
             "abstract": stmt.excluded.abstract,
             "acceptance": stmt.excluded.acceptance,
+            "openreview_url": stmt.excluded.openreview_url,
             "ingested_at": stmt.excluded.ingested_at,
         },
     )
     db.exec(stmt)
+    upsert_paper_identifiers(
+        db,
+        paper.id,
+        {
+            "openreview": paper.id,
+            "doi": _raw_identifier(paper, "doi", "DOI"),
+            "arxiv": _raw_identifier(paper, "arxiv", "arxiv_id", "ArXiv"),
+        },
+        source="openreview",
+    )
+
+
+def _raw_identifier(paper: FetchedPaper, *keys: str) -> str | None:
+    content = paper.raw_content or {}
+    for key in keys:
+        value = content.get(key)
+        if isinstance(value, str) and value.strip():
+            if key.lower() == "doi":
+                return normalize_doi(value)
+            if "arxiv" in key.lower():
+                return normalize_arxiv(value)
+            return value.strip()
+    return None
 
 
 def _upsert_review(db: Session, paper_id: str, review: FetchedReview) -> None:

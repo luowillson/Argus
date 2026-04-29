@@ -1,9 +1,12 @@
-from fastapi import APIRouter, HTTPException, Response
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.db.models import Paper
 from app.deps import DbSession
+from app.schemas.citation import CitationGraph
 from app.schemas.paper import PaperDetail, PaperOut, PaperStatus
 from app.services.analyze import AnalyzeError, analyze_paper
 from app.services.ingest import ingest_paper
@@ -11,6 +14,7 @@ from app.services.ingest_failures import get_ingest_failure
 from app.services.openreview_client import parse_forum_id
 from app.services.paper_view import build_paper_detail
 from app.services.search import build_results_for_ids
+from app.services.citations import build_citation_graph, enrich_paper_citations
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 
@@ -45,6 +49,41 @@ def get_papers_batch(req: PapersBatchRequest, db: DbSession) -> list[PaperOut]:
         raise HTTPException(status_code=400, detail="batch size too large (max 200)")
     forum_ids = [parse_forum_id(pid) for pid in req.ids]
     return build_results_for_ids(db, forum_ids)
+
+
+@router.get("/{paper_id}/citations", response_model=CitationGraph)
+def get_citations(
+    paper_id: str,
+    db: DbSession,
+    direction: Literal["references"] = Query(default="references"),
+    limit: int = Query(default=60, ge=1, le=200),
+) -> CitationGraph:
+    resolved_id = parse_forum_id(paper_id)
+    try:
+        return build_citation_graph(db, resolved_id, direction=direction, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{paper_id}/citations/enrich")
+def enrich_citations(
+    paper_id: str,
+    db: DbSession,
+    sync: bool = Query(default=False),
+) -> dict[str, object]:
+    resolved_id = parse_forum_id(paper_id)
+    if db.get(Paper, resolved_id) is None:
+        raise HTTPException(status_code=404, detail=f"paper {paper_id!r} not found")
+    if sync:
+        try:
+            return enrich_paper_citations(db, resolved_id)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Citation enrichment failed: {exc}") from exc
+
+    from app.workers.tasks import enrich_citations_task  # noqa: PLC0415
+
+    enrich_citations_task.delay(resolved_id)
+    return {"paper_id": resolved_id, "status": "queued"}
 
 
 @router.get("/{paper_id}", response_model=PaperDetail)
@@ -133,4 +172,8 @@ def ingest(paper_id: str, db: DbSession) -> dict[str, object]:
             status_code=502,
             detail=f"OpenReview fetch failed for {forum_id!r}: {exc}",
         ) from exc
+    from app.workers.tasks import embed_paper_task, enrich_citations_task  # noqa: PLC0415
+
+    embed_paper_task.delay(forum_id)
+    enrich_citations_task.delay(forum_id)
     return result

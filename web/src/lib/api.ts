@@ -52,6 +52,7 @@ const VerdictSchema = z.enum([
 ]);
 
 const ConsensusStrengthSchema = z.enum(["strong", "moderate", "mixed", "split"]);
+const CitationGraphStatusSchema = z.enum(["not_enriched", "enriched", "failed"]);
 
 export const PaperDetailSchema = z.object({
   id: z.string(),
@@ -59,7 +60,9 @@ export const PaperDetailSchema = z.object({
   authors: z.string(),
   venue: z.string().nullable(),
   citations: z.number().nullable(),
-  openreview_url: z.string(),
+  references_count: z.number().nullable(),
+  citation_graph_status: CitationGraphStatusSchema,
+  openreview_url: z.string().nullable(),
   acceptance: z.string().nullable(),
 
   score: z.number().nullable(),
@@ -98,6 +101,10 @@ export const PaperOutSchema = z.object({
   title: z.string(),
   authors: z.string(),
   venue: z.string().nullable(),
+  citations: z.number().nullable(),
+  references_count: z.number().nullable(),
+  citation_graph_status: CitationGraphStatusSchema,
+  openreview_url: z.string().nullable(),
   acceptance: z.string().nullable(),
   score: z.number().nullable(),
   grade: z.string(),
@@ -121,6 +128,47 @@ export const PaperStatusSchema = z.object({
 });
 
 export type PaperStatusDTO = z.infer<typeof PaperStatusSchema>;
+
+export const CitationPaperSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  authors: z.string(),
+  venue: z.string().nullable(),
+  year: z.number().nullable(),
+  citations: z.number().nullable(),
+  references_count: z.number().nullable(),
+  openreview_url: z.string().nullable(),
+  provider_url: z.string().nullable(),
+  score: z.number().nullable(),
+  grade: z.string(),
+  verdict: VerdictSchema,
+  novelty: z.number().nullable(),
+  technical: z.number().nullable(),
+  clarity: z.number().nullable(),
+  impact: z.number().nullable(),
+  consensus_strength: ConsensusStrengthSchema,
+  reviewer_count: z.number(),
+  graph_only: z.boolean(),
+});
+
+export const CitationGraphSchema = z.object({
+  paper_id: z.string(),
+  direction: z.enum(["references"]),
+  status: CitationGraphStatusSchema,
+  generated_at: z.string().datetime(),
+  nodes: z.array(CitationPaperSchema),
+  edges: z.array(
+    z.object({
+      source: z.string(),
+      target: z.string(),
+      edge_type: z.enum(["cites"]),
+      weight: z.number(),
+    }),
+  ),
+});
+
+export type CitationPaperDTO = z.infer<typeof CitationPaperSchema>;
+export type CitationGraphDTO = z.infer<typeof CitationGraphSchema>;
 
 /** Discriminated union — replaces the old 4-way string-or-DTO return type. */
 export type PaperFetchResult =
@@ -155,6 +203,31 @@ export async function fetchPaperStatus(paperId: string): Promise<PaperStatusDTO>
     throw new Error(`API error ${res.status} fetching status for ${paperId}`);
   }
   return PaperStatusSchema.parse(await res.json());
+}
+
+export async function fetchPaperCitations(
+  paperId: string,
+  init?: RequestInit,
+): Promise<CitationGraphDTO> {
+  const params = new URLSearchParams({ direction: "references" });
+  const res = await fetch(
+    `${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/citations?${params}`,
+    withTimeout({ cache: "no-store", ...init }),
+  );
+  if (!res.ok) {
+    throw new Error(await readErrorDetail(res, `Citation API error ${res.status}`));
+  }
+  return CitationGraphSchema.parse(await res.json());
+}
+
+export async function enrichPaperCitations(paperId: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/citations/enrich`,
+    withTimeout({ method: "POST" }),
+  );
+  if (!res.ok) {
+    throw new Error(await readErrorDetail(res, `Citation enrichment failed ${res.status}`));
+  }
 }
 
 /** Bulk paper fetch (used by the saved/reading-list page — one round-trip for N ids). */

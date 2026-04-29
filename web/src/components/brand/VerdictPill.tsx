@@ -12,6 +12,7 @@ const STYLES: Record<Verdict, string> = {
   "Weak Accept": "bg-borderline/10 text-borderline border-borderline/30",
   Borderline: "bg-rule-soft text-muted-2 border-rule",
   Reject: "bg-burgundy/8 text-burgundy border-burgundy/30",
+  "Insufficient reviews": "bg-rule-soft text-muted-2 border-rule",
 };
 
 export function VerdictPill({ verdict, className }: Props) {

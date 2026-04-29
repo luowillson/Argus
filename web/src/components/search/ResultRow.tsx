@@ -15,7 +15,7 @@ type Props = {
 };
 
 function ResultRowImpl({ paper, isFirst, saved = false }: Props) {
-  const dest = `/papers/${paper.id}`;
+  const dest = `/papers/${encodeURIComponent(paper.id)}`;
   const score = paper.score;
 
   return (
@@ -65,21 +65,26 @@ function ResultRowImpl({ paper, isFirst, saved = false }: Props) {
         <div className="mt-2 max-w-[680px] font-serif text-[13px] italic leading-[1.55] text-prose">
           <LatexText>{paper.tldr ?? ""}</LatexText>
         </div>
-        <div className="mt-2 font-mono text-[11px] text-muted">
-          <a
-            href={`https://openreview.net/forum?id=${encodeURIComponent(paper.id)}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="pointer-events-auto relative z-20 cursor-pointer hover:text-burgundy"
-          >
-            openreview:{paper.id}
-          </a>
-        </div>
+        {paper.openreviewUrl ? (
+          <div className="mt-2 font-mono text-[11px] text-muted">
+            <a
+              href={paper.openreviewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="pointer-events-auto relative z-20 cursor-pointer hover:text-burgundy"
+            >
+              openreview:{paper.id}
+            </a>
+          </div>
+        ) : null}
       </div>
 
       {/* Venue */}
       <div className="pointer-events-none relative z-10 pt-1">
         <div className="text-[14px] font-medium text-prose">{paper.venue}</div>
+        <div className="mt-2 font-mono text-[11px] text-muted">
+          {paper.citations.toLocaleString()} cites
+        </div>
       </div>
 
       {/* Metrics — numbers only, no bars */}

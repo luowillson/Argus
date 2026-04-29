@@ -38,7 +38,7 @@ export function ScoreBand({ paper }: Props) {
           </span>
         </div>
         <div className="mt-1.5 font-sans text-[13px] text-muted-2">
-          {score === null && "score pending"}
+          {score === null && (paper.openreviewUrl ? "score pending" : "not scored yet")}
         </div>
         <MethodologyDialog />
       </div>

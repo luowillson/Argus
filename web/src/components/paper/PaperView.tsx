@@ -4,6 +4,7 @@ import { ScoreBand } from "./ScoreBand";
 import { TldrSection } from "./TldrSection";
 import { ReadSkimGrid } from "./ReadSkimGrid";
 import { ReviewerVoices } from "./ReviewerVoices";
+import { CitationGraphSection } from "./CitationGraphSection";
 
 export function PaperView({
   paper,
@@ -28,6 +29,7 @@ export function PaperView({
         <ReadSkimGrid deep={paper.deep} skim={paper.skim} />
       )}
       <ReviewerVoices paper={paper} />
+      <CitationGraphSection paperId={paper.id} status={paper.citationGraphStatus} />
     </article>
   );
 }

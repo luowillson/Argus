@@ -77,6 +77,7 @@ def ingest_paper_task(self, forum_id: str) -> dict:  # type: ignore[override]
     )
     # Chain embedding step after successful ingest (best-effort; failures don't block).
     embed_paper_task.delay(forum_id)
+    enrich_citations_task.delay(forum_id)
     return result
 
 
@@ -135,6 +136,39 @@ def embed_paper_task(self, paper_id: str) -> None:  # type: ignore[override]
         db.commit()
 
     logger.info("embed_paper_task: done paper=%r", paper_id)
+
+
+@celery_app.task(
+    name="veros.enrich_citations",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=120,
+)
+def enrich_citations_task(self, paper_id: str) -> dict[str, object]:  # type: ignore[override]
+    from app.services.citations import enrich_paper_citations
+
+    logger.info("enrich_citations_task: starting paper=%r retry=%d", paper_id, self.request.retries)
+
+    engine = get_engine()
+    with Session(engine) as db:
+        try:
+            result = enrich_paper_citations(db, paper_id)
+        except Exception as exc:
+            logger.exception(
+                "enrich_citations_task: failed paper=%r (retry %d/%d)",
+                paper_id,
+                self.request.retries,
+                self.max_retries,
+            )
+            raise self.retry(exc=exc) from exc
+
+    logger.info(
+        "enrich_citations_task: done paper=%r refs=%s provider=%s",
+        paper_id,
+        result.get("reference_count"),
+        result.get("provider"),
+    )
+    return result
 
 
 @celery_app.task(

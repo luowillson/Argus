@@ -16,6 +16,8 @@ def test_create_app_registers_core_routes() -> None:
     assert "/api/v1/search" in paths
     assert "/api/v1/papers/{paper_id}" in paths
     assert "/api/v1/papers/batch" in paths
+    assert "/api/v1/papers/{paper_id}/citations" in paths
+    assert "/api/v1/papers/{paper_id}/citations/enrich" in paths
     assert "/api/v1/saved" in paths
     assert "/api/v1/saved/{paper_id}" in paths
     assert "/api/v1/search/lookup" in paths
@@ -116,6 +118,35 @@ def test_openreview_title_similarity_helper() -> None:
 
     assert _title_similarity("Attention is All You Need", "Attention Is All You Need") == 1.0
     assert _title_similarity("transformer paper", "Attention Is All You Need") < 0.5
+
+
+def test_citation_provider_normalizes_external_ids() -> None:
+    from app.services.citation_providers import SemanticScholarProvider
+
+    paper = SemanticScholarProvider._to_external_paper(
+        {
+            "paperId": "abc123",
+            "corpusId": 987,
+            "title": "Reference Paper",
+            "authors": [{"name": "A. Researcher"}],
+            "year": 2024,
+            "citationCount": 12,
+            "referenceCount": 3,
+            "externalIds": {
+                "DOI": "https://doi.org/10.123/Example",
+                "ArXiv": "arXiv:2401.00001",
+            },
+        }
+    )
+
+    assert paper.external_ids == {
+        "semantic_scholar": "abc123",
+        "corpus_id": "987",
+        "doi": "10.123/example",
+        "arxiv": "2401.00001",
+    }
+    assert paper.authors == ["A. Researcher"]
+    assert paper.citations == 12
 
 
 def test_landing_graph_falls_back_when_no_rows() -> None:

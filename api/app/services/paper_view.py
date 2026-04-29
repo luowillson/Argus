@@ -13,6 +13,7 @@ from sqlmodel import Session, select
 
 from app.db.models import AIInsight, Paper, Review, VerosScore
 from app.schemas.paper import PaperDetail, ReviewerVoice, Verdict
+from app.services.citations import citation_graph_status
 from app.services.dimensions import standardized_dimensions
 from app.services.scoring import normalize_rating_to_ten, rating_scale_max_for_paper
 from app.utils.ratings import parse_numeric, parse_recommendation
@@ -147,6 +148,8 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
         authors=", ".join(paper.authors) if paper.authors else "Unknown",
         venue=paper.venue,
         citations=paper.citations,
+        references_count=paper.references_count,
+        citation_graph_status=citation_graph_status(paper),
         openreview_url=paper.openreview_url,
         acceptance=paper.acceptance,
         score=float(score_row.score) if score_row else None,

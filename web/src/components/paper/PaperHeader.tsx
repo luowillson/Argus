@@ -2,10 +2,6 @@ import Link from "next/link";
 import type { Paper } from "@/lib/types";
 import { SaveButton } from "./SaveButton";
 
-function openreviewUrl(id: string) {
-  return `https://openreview.net/forum?id=${encodeURIComponent(id)}`;
-}
-
 export function PaperHeader({
   paper,
   initialSaved = false,
@@ -16,7 +12,11 @@ export function PaperHeader({
   const metadata = [
     paper.venue,
     paper.acceptance ? `accepted (${paper.acceptance})` : null,
+    `${paper.citations.toLocaleString()} citations`,
+    paper.referencesCount !== null ? `${paper.referencesCount.toLocaleString()} references` : null,
   ].filter(Boolean);
+  const openreviewUrl =
+    paper.openreviewUrl ?? `https://openreview.net/forum?id=${encodeURIComponent(paper.id)}`;
 
   return (
     <header>
@@ -26,14 +26,18 @@ export function PaperHeader({
             ← Back to results
           </Link>
           <span className="px-2">·</span>
-          <a
-            href={openreviewUrl(paper.id)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-mono hover:text-ink"
-          >
-            openreview:{paper.id}
-          </a>
+          {paper.openreviewUrl ? (
+            <a
+              href={openreviewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono hover:text-ink"
+            >
+              openreview:{paper.id}
+            </a>
+          ) : (
+            <span className="font-mono">graph:{paper.id}</span>
+          )}
         </div>
         <SaveButton paperId={paper.id} initialSaved={initialSaved} />
       </div>

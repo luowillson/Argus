@@ -11,6 +11,7 @@ Verdict = Literal[
     "Insufficient reviews",
 ]
 ConsensusStrength = Literal["strong", "moderate", "mixed", "split"]
+CitationGraphStatus = Literal["not_enriched", "enriched", "failed"]
 
 
 class ReviewerVoice(BaseModel):
@@ -27,7 +28,9 @@ class PaperDetail(BaseModel):
     authors: str  # joined for display; the array lives on Paper.authors
     venue: str | None
     citations: int | None
-    openreview_url: str
+    references_count: int | None
+    citation_graph_status: CitationGraphStatus
+    openreview_url: str | None
     acceptance: str | None
 
     # Score
@@ -72,6 +75,10 @@ class PaperOut(BaseModel):
     title: str
     authors: str
     venue: str | None
+    citations: int | None
+    references_count: int | None
+    citation_graph_status: CitationGraphStatus
+    openreview_url: str | None
     acceptance: str | None
     score: float | None
     grade: str

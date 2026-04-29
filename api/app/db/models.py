@@ -16,11 +16,37 @@ class Paper(SQLModel, table=True):
     venue: str | None = None
     year: int | None = None
     citations: int | None = None
+    references_count: int | None = None
     abstract: str | None = None
-    openreview_url: str
+    openreview_url: str | None = None
     acceptance: str | None = None
+    citation_metadata: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    citation_enriched_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
     ingested_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
     analyzed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class PaperIdentifier(SQLModel, table=True):
+    __tablename__ = "paper_identifiers"
+    __table_args__ = (
+        Index("paper_identifiers_lookup_idx", "namespace", "value", unique=True),
+    )
+
+    paper_id: str = Field(
+        sa_column=Column(
+            String, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+        ),
+    )
+    namespace: str = Field(primary_key=True)
+    value: str = Field(primary_key=True)
+    confidence: float = Field(default=1.0, sa_column=Column(Numeric(4, 3), nullable=False))
+    source: str
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(),
         sa_column=Column(DateTime(timezone=True), nullable=False),

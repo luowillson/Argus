@@ -40,14 +40,23 @@ TABLES: tuple[TableSpec, ...] = (
             "venue",
             "year",
             "citations",
+            "references_count",
             "abstract",
             "openreview_url",
             "acceptance",
+            "citation_metadata",
+            "citation_enriched_at",
             "ingested_at",
             "analyzed_at",
             "created_at",
         ),
         conflict_columns=("id",),
+        jsonb_columns=frozenset({"citation_metadata"}),
+    ),
+    TableSpec(
+        name="paper_identifiers",
+        columns=("paper_id", "namespace", "value", "confidence", "source", "created_at"),
+        conflict_columns=("namespace", "value"),
     ),
     TableSpec(
         name="reviews",
@@ -101,6 +110,19 @@ TABLES: tuple[TableSpec, ...] = (
         columns=("paper_id", "embedding", "source", "model"),
         conflict_columns=("paper_id",),
         vector_columns=frozenset({"embedding"}),
+    ),
+    TableSpec(
+        name="paper_edges",
+        columns=(
+            "src_paper_id",
+            "dst_paper_id",
+            "edge_type",
+            "weight",
+            "edge_metadata",
+            "created_at",
+        ),
+        conflict_columns=("src_paper_id", "dst_paper_id", "edge_type"),
+        jsonb_columns=frozenset({"edge_metadata"}),
     ),
 )
 

@@ -11,6 +11,7 @@ function asVerdict(v: string): Verdict {
     case "Weak Accept":
     case "Borderline":
     case "Reject":
+    case "Insufficient reviews":
       return v;
     default:
       return FALLBACK_VERDICT;
@@ -26,7 +27,10 @@ export function adaptPaperOut(dto: PaperOutDTO): Paper {
       dto.tldr ??
       "Analysis in progress — score computed from reviewer ratings.",
     venue: dto.venue ?? "Unknown venue",
-    citations: 0,
+    citations: dto.citations ?? 0,
+    referencesCount: dto.references_count,
+    citationGraphStatus: dto.citation_graph_status,
+    openreviewUrl: dto.openreview_url,
     score: dto.score,
     grade: dto.grade,
     verdict: asVerdict(dto.verdict),
@@ -67,6 +71,9 @@ export function adaptPaperDetail(dto: PaperDetailDTO): Paper {
       "AI summary in progress — score and reviewer voices below come from real OpenReview data.",
     venue: dto.venue ?? "Unknown venue",
     citations: dto.citations ?? 0,
+    referencesCount: dto.references_count,
+    citationGraphStatus: dto.citation_graph_status,
+    openreviewUrl: dto.openreview_url,
     score: dto.score,
     grade: dto.grade,
     verdict: asVerdict(dto.verdict),

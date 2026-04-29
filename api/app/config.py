@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     openreview_username: str = ""
     openreview_password: str = ""
 
+    semantic_scholar_api_key: str = ""
+    openalex_api_key: str = ""
+    crossref_mailto: str = ""
+    citation_max_references: int = 60
+    citation_http_timeout: float = 12.0
+
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     demo_user_id: str = "demo-user"
