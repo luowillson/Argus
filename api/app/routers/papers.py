@@ -1,4 +1,5 @@
 from typing import Literal
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
@@ -82,6 +83,14 @@ def enrich_citations(
 
     from app.workers.tasks import enrich_citations_task  # noqa: PLC0415
 
+    paper = db.get(Paper, resolved_id)
+    assert paper is not None
+    metadata = dict(paper.citation_metadata or {})
+    metadata.pop("error", None)
+    metadata["last_queued_at"] = datetime.now(tz=UTC).isoformat()
+    paper.citation_metadata = metadata
+    db.add(paper)
+    db.commit()
     enrich_citations_task.delay(resolved_id)
     return {"paper_id": resolved_id, "status": "queued"}
 

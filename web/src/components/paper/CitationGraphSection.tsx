@@ -16,6 +16,7 @@ type Props = {
 };
 
 export function CitationGraphSection({ paperId, status }: Props) {
+  const [localStatus, setLocalStatus] = useState(status);
   const [graph, setGraph] = useState<CitationGraphDTO | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">(status === "enriched" ? "loading" : "ready");
   const [message, setMessage] = useState<string>("");
@@ -41,6 +42,7 @@ export function CitationGraphSection({ paperId, status }: Props) {
 
   async function handleEnrich() {
     setMessage("Queueing citation enrichment...");
+    setLocalStatus("not_enriched");
     try {
       await enrichPaperCitations(paperId);
       setMessage("Citation enrichment queued. References will appear after the worker finishes.");
@@ -60,7 +62,7 @@ export function CitationGraphSection({ paperId, status }: Props) {
             References this paper builds on.
           </div>
         </div>
-        {status !== "enriched" && (
+        {localStatus !== "enriched" && (
           <button
             type="button"
             onClick={handleEnrich}
@@ -80,17 +82,17 @@ export function CitationGraphSection({ paperId, status }: Props) {
           Citation graph unavailable.
         </div>
       )}
-      {state === "ready" && status === "failed" && (
+      {state === "ready" && localStatus === "failed" && !message && (
         <div className="mt-5 font-sans text-[13px] text-burgundy">
           Citation enrichment did not find a provider match.
         </div>
       )}
-      {state === "ready" && status === "not_enriched" && !message && (
+      {state === "ready" && localStatus === "not_enriched" && !message && (
         <div className="mt-5 font-sans text-[13px] text-muted">
           References have not been fetched for this paper yet.
         </div>
       )}
-      {state === "ready" && status === "enriched" && references.length === 0 && (
+      {state === "ready" && localStatus === "enriched" && references.length === 0 && (
         <div className="mt-5 font-sans text-[13px] text-muted">No references stored yet.</div>
       )}
       {references.length > 0 && (

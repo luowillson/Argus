@@ -102,10 +102,18 @@ def enrich_paper_citations(
     result: CitationFetchResult | None = None
     provider_used = ""
     provider_errors: list[str] = []
-    for provider_name, provider in (
-        ("semantic_scholar", semantic),
-        ("openalex", openalex),
-    ):
+    provider_order: tuple[tuple[str, SemanticScholarProvider | OpenAlexProvider], ...]
+    if settings.semantic_scholar_api_key:
+        provider_order = (("semantic_scholar", semantic), ("openalex", openalex))
+    elif doi or arxiv_id:
+        provider_order = (("openalex", openalex), ("semantic_scholar", semantic))
+    else:
+        # Anonymous Semantic Scholar title search shares a public rate-limit
+        # pool. Until Veros has a dedicated S2 key, do title-only resolution via
+        # OpenAlex and reserve anonymous S2 calls for exact DOI/arXiv lookups.
+        provider_order = (("openalex", openalex),)
+
+    for provider_name, provider in provider_order:
         try:
             result = provider.fetch(
                 title=paper.title,
@@ -118,6 +126,11 @@ def enrich_paper_citations(
         except CitationProviderError as exc:
             provider_errors.append(f"{provider_name}: {exc}")
             result = None
+        if result is None and not (
+            provider_errors and provider_errors[-1].startswith(f"{provider_name}:")
+        ):
+            provider_errors.append(f"{provider_name}: no confident match")
+            continue
         if result is not None:
             provider_used = provider_name
             break
@@ -127,6 +140,8 @@ def enrich_paper_citations(
         if fallback is not None:
             result = CitationFetchResult(seed=fallback, references=[])
             provider_used = "crossref"
+        else:
+            provider_errors.append("crossref: no DOI match")
 
     if result is None:
         metadata = dict(paper.citation_metadata or {})
