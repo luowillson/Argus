@@ -18,7 +18,8 @@ pnpm install
 pnpm dev
 ```
 
-The app runs at `http://localhost:3000`.
+The app runs at `http://localhost:3000`. Use that URL for local development;
+the API also permits `http://127.0.0.1:3000` for convenience.
 
 Set the API base URL in `.env.local`:
 

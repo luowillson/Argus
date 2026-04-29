@@ -29,7 +29,7 @@ export async function submitSearch(
 
   let href = `/search?q=${encodeURIComponent(trimmed)}`;
   try {
-    const lookup = await lookupSearch(trimmed);
+    const lookup = await lookupSearch(trimmed, false);
     if (lookup.intent === "specific" && lookup.paper_id) {
       const params = new URLSearchParams({ q: trimmed, focus: lookup.paper_id });
       if (lookup.openreview_candidate?.title) {

@@ -4,8 +4,9 @@ export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 const DEFAULT_TIMEOUT_MS = 8_000;
+const SEARCH_TIMEOUT_MS = 20_000;
 const RANKING_TIMEOUT_MS = 15_000;
-const EXPLORE_TIMEOUT_MS = 60_000;
+const EXPLORE_TIMEOUT_MS = 120_000;
 
 function timeoutSignal(ms: number): AbortSignal | undefined {
   if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
@@ -324,7 +325,7 @@ export async function fetchSearchPage(
   });
   const res = await fetch(
     `${API_BASE_URL}/search/page?${params}`,
-    withTimeout({ cache: "no-store", ...init }),
+    withTimeout({ cache: "no-store", ...init }, SEARCH_TIMEOUT_MS),
   );
   if (!res.ok) throw new Error(`Search API error ${res.status}`);
   return SearchPageSchema.parse(await res.json());
@@ -339,7 +340,7 @@ export async function fetchSearchLive(
   const params = new URLSearchParams({ q: query, mode: "topic", sort });
   const res = await fetch(
     `${API_BASE_URL}/search?${params}`,
-    withTimeout({ cache: "no-store", signal }),
+    withTimeout({ cache: "no-store", signal }, SEARCH_TIMEOUT_MS),
   );
   if (!res.ok) throw new Error(`Search API error ${res.status}`);
   return z.array(PaperOutSchema).parse(await res.json());
@@ -363,14 +364,20 @@ export const SearchLookupResponseSchema = z.object({
 
 export type SearchLookupResponse = z.infer<typeof SearchLookupResponseSchema>;
 
-/** Submit-time classifier: returns intent, optional matched paper id, and a result list. */
-export async function lookupSearch(query: string): Promise<SearchLookupResponse> {
-  const res = await fetch(`${API_BASE_URL}/search/lookup`, withTimeout({
+/** Submit-time classifier: returns intent, optional matched paper id, and optionally results. */
+export async function lookupSearch(
+  query: string,
+  includeResults = true,
+): Promise<SearchLookupResponse> {
+  const params = new URLSearchParams();
+  if (!includeResults) params.set("include_results", "false");
+  const url = `${API_BASE_URL}/search/lookup${params.toString() ? `?${params}` : ""}`;
+  const res = await fetch(url, withTimeout({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ q: query }),
     cache: "no-store",
-  }));
+  }, SEARCH_TIMEOUT_MS));
   if (!res.ok) throw new Error(`Search lookup API error ${res.status}`);
   return SearchLookupResponseSchema.parse(await res.json());
 }
@@ -379,7 +386,7 @@ export async function fetchSearchCount(query: string): Promise<number> {
   const params = new URLSearchParams({ q: query });
   const res = await fetch(
     `${API_BASE_URL}/search/count?${params}`,
-    withTimeout({ cache: "no-store" }),
+    withTimeout({ cache: "no-store" }, SEARCH_TIMEOUT_MS),
   );
   if (!res.ok) return 0;
   const data = z.object({ total: z.number() }).parse(await res.json());

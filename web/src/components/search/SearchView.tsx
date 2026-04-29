@@ -28,6 +28,7 @@ type Props = {
   totalPages?: number;
   activeSort?: SearchSortKey;
   sortLabel?: string;
+  initialLoadFailed?: boolean;
 };
 
 const DEBOUNCE_MS = 450;
@@ -81,6 +82,7 @@ export function SearchView({
   totalPages = 1,
   activeSort = "score",
   sortLabel = "Veros score",
+  initialLoadFailed = false,
 }: Props) {
   const router = useRouter();
 
@@ -98,6 +100,10 @@ export function SearchView({
   const [displayPage, setDisplayPage] = useState(currentPage);
   const [savedIds, setSavedIds] = useState<Set<string>>(() => new Set());
   const [submitting, setSubmitting] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(
+    initialLoadFailed ? "Search took too long. Retrying…" : null,
+  );
+  const [retryingInitialLoad, setRetryingInitialLoad] = useState(initialLoadFailed);
   const lastIssuedQ = useRef(initialQuery);
 
   // Pull saved-paper ids from the API (single source of truth) on mount and
@@ -133,6 +139,39 @@ export function SearchView({
     };
   }, []);
 
+  useEffect(() => {
+    if (!initialLoadFailed) return;
+
+    const controller = new AbortController();
+    const trimmed = initialQuery.trim();
+    const mode: SearchMode = initialFocusId ? "specific" : "auto";
+
+    fetchSearchPage(
+      trimmed,
+      PAGE_SIZE,
+      Math.max(0, (currentPage - 1) * PAGE_SIZE),
+      mode,
+      activeSort,
+      { signal: controller.signal },
+    )
+      .then((page) => {
+        if (controller.signal.aborted) return;
+        setResults(page.results.map(adaptPaperOut));
+        setRemoteTotalCount(page.total);
+        setRemoteTotalPages(Math.max(1, Math.ceil(page.total / PAGE_SIZE)));
+        setSearchError(null);
+      })
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name === "AbortError") return;
+        setSearchError("Search is taking longer than expected. Try again in a moment.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setRetryingInitialLoad(false);
+      });
+
+    return () => controller.abort();
+  }, [activeSort, currentPage, initialFocusId, initialLoadFailed, initialQuery]);
+
   // Debounced live topic search on typing.
   useEffect(() => {
     if (q === lastIssuedQ.current) return;
@@ -158,11 +197,12 @@ export function SearchView({
         setFocusId(null);
         setPendingTitle(null);
         setNotFound(false);
+        setSearchError(null);
         setDisplayPage(1);
         replaceBrowserUrl(liveSearchHref(trimmed, normalizedSort));
       } catch (err) {
         if ((err as { name?: string })?.name !== "AbortError") {
-          // Keep prior results on error.
+          setSearchError("Search is taking longer than expected. Keeping the previous results.");
         }
       }
     }, DEBOUNCE_MS);
@@ -183,10 +223,9 @@ export function SearchView({
         setResults(page.results.map(adaptPaperOut));
         setRemoteTotalCount(page.total);
         setRemoteTotalPages(Math.max(1, Math.ceil(page.total / PAGE_SIZE)));
+        setSearchError(null);
       } catch {
-        setResults([]);
-        setRemoteTotalCount(0);
-        setRemoteTotalPages(1);
+        setSearchError("Search is taking longer than expected. Keeping the previous results.");
       }
       setFocusId(null);
       setPendingTitle(null);
@@ -262,10 +301,19 @@ export function SearchView({
             on OpenReview. Showing closest matches from your library instead.
           </div>
         )}
+        {searchError && (
+          <div className="mt-3 border-l-2 border-burgundy/60 bg-cream/50 px-3 py-2 font-sans text-[13px] text-prose">
+            {searchError}
+          </div>
+        )}
       </div>
 
       <div className="mx-auto max-w-[1100px] px-6 pb-16 sm:px-10 lg:px-16">
-        {totalCount === 0 ? (
+        {retryingInitialLoad ? (
+          <div className="border-t border-rule px-0 py-16 text-center font-sans text-[13px] text-muted">
+            Loading results…
+          </div>
+        ) : totalCount === 0 ? (
           <div className="border-t border-rule px-0 py-16 text-center font-sans text-[13px] text-muted">
             No papers match this query yet. Try a different keyword or paste a
             forum URL.

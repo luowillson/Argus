@@ -105,6 +105,7 @@ _GENERIC_TOPIC_TERMS = {
 }
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9\-]{2,}")
 _MAX_CANDIDATES = 12
+_CANDIDATE_FETCH_LIMIT = 120
 _MIN_PATHWAY_CANDIDATES = 4
 _WEAK_STAGE_SCORE = 0.5
 _MIN_WEAK_OR_MISSING_FOR_ENRICHMENT = 2
@@ -285,6 +286,72 @@ def _load_similarities_from_embedding(
     sql += "ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :n"
     rows = db.execute(sa_text(sql), params).fetchall()
     return {row[0]: max(0.0, float(row[1])) for row in rows}
+
+
+def _escape_like(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _dedupe_limited(values: list[str], limit: int) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _load_text_candidate_ids(
+    db: Session,
+    *,
+    query_text: str,
+    required_anchors: list[str],
+    limit: int,
+) -> list[str]:
+    """Return a bounded text/trigram candidate set for pathway matching."""
+    term = query_text.strip() or (required_anchors[0] if required_anchors else "")
+    if not term:
+        return []
+
+    sql = sa_text(
+        """
+        SELECT id
+        FROM papers
+        WHERE
+          title ILIKE :like ESCAPE '\\'
+          OR COALESCE(abstract, '') ILIKE :like ESCAPE '\\'
+          OR word_similarity(lower(:term), lower(title)) > 0.16
+          OR word_similarity(lower(:term), lower(COALESCE(abstract, ''))) > 0.16
+        ORDER BY
+          (
+            CASE
+              WHEN title ILIKE :like ESCAPE '\\'
+                OR COALESCE(abstract, '') ILIKE :like ESCAPE '\\'
+              THEN 1
+              ELSE 0
+            END
+          ) DESC,
+          GREATEST(
+            word_similarity(lower(:term), lower(title)),
+            word_similarity(lower(:term), lower(COALESCE(abstract, '')))
+          ) DESC
+        LIMIT :lim
+        """
+    )
+
+    rows = db.execute(
+        sql,
+        {
+            "term": term,
+            "like": f"%{_escape_like(term)}%",
+            "lim": limit,
+        },
+    ).fetchall()
+    return [str(row[0]) for row in rows]
 
 
 def _try_query_embedding(text: str) -> list[float] | None:
@@ -527,7 +594,28 @@ def _build_candidate_pool(
     exclude_paper_ids: set[str] | None = None,
     limit: int,
 ) -> list[_Candidate]:
-    paper_ids = list(db.exec(select(Paper.id)).all())
+    seed_concepts = _concept_map(query_text)
+    seed_anchors = required_anchors or _anchor_terms(seed_concepts)
+    fetch_limit = max(limit * 8, _CANDIDATE_FETCH_LIMIT)
+    text_ids = _load_text_candidate_ids(
+        db,
+        query_text=query_text,
+        required_anchors=seed_anchors,
+        limit=fetch_limit,
+    )
+    similarities: dict[str, float] = {}
+    if len(text_ids) < limit:
+        seed_embedding = _try_query_embedding(query_text)
+        similarities = _load_similarities_from_embedding(
+            db,
+            seed_embedding=seed_embedding,
+            exclude_paper_id=None,
+            limit=fetch_limit,
+        )
+    paper_ids = _dedupe_limited(
+        [*text_ids, *similarities.keys()],
+        limit=max(limit * 10, _CANDIDATE_FETCH_LIMIT),
+    )
     if not paper_ids:
         return []
 
@@ -539,17 +627,6 @@ def _build_candidate_pool(
         i.paper_id: i for i in db.exec(select(AIInsight).where(AIInsight.paper_id.in_(paper_ids))).all()
     }
     cached_concepts = _load_cached_concepts(db, paper_ids)
-
-    seed_concepts = _concept_map(query_text)
-    seed_anchors = required_anchors or _anchor_terms(seed_concepts)
-    seed_embedding = _try_query_embedding(query_text)
-
-    similarities = _load_similarities_from_embedding(
-        db,
-        seed_embedding=seed_embedding,
-        exclude_paper_id=None,
-        limit=max(limit * 3, _MAX_CANDIDATES),
-    )
 
     candidates: list[_Candidate] = []
     q_lower = query_text.lower()

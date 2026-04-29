@@ -106,7 +106,11 @@ _IN_DB_CONFIDENT_MATCH = 0.85
 
 
 @router.post("/lookup", response_model=LookupResponse)
-def lookup(req: LookupRequest, db: DbSession) -> LookupResponse:
+def lookup(
+    req: LookupRequest,
+    db: DbSession,
+    include_results: bool = Query(default=True),
+) -> LookupResponse:
     """Classify the query, optionally pull a missing paper from OpenReview, return results."""
     q = req.q.strip()
     if not q:
@@ -117,7 +121,7 @@ def lookup(req: LookupRequest, db: DbSession) -> LookupResponse:
             ingest_started=False,
             openreview_found=False,
             openreview_candidate=None,
-            results=search_papers(db, "", mode="topic"),
+            results=search_papers(db, "", mode="topic") if include_results else [],
         )
 
     intent_info = classify_intent(db, q)
@@ -132,7 +136,7 @@ def lookup(req: LookupRequest, db: DbSession) -> LookupResponse:
             ingest_started=False,
             openreview_found=False,
             openreview_candidate=None,
-            results=search_papers(db, q, mode="topic"),
+            results=search_papers(db, q, mode="topic") if include_results else [],
         )
 
     # Specific intent. If the in-DB match is very confident, surface it directly.
@@ -145,7 +149,7 @@ def lookup(req: LookupRequest, db: DbSession) -> LookupResponse:
             ingest_started=False,
             openreview_found=False,
             openreview_candidate=None,
-            results=search_papers(db, q, mode="specific"),
+            results=search_papers(db, q, mode="specific") if include_results else [],
         )
 
     # Otherwise try OpenReview before giving up.
@@ -163,7 +167,7 @@ def lookup(req: LookupRequest, db: DbSession) -> LookupResponse:
             ingest_started=False,
             openreview_found=False,
             openreview_candidate=None,
-            results=search_papers(db, q, mode="specific"),
+            results=search_papers(db, q, mode="specific") if include_results else [],
         )
 
     if get_ingest_failure(db, or_match.candidate.id) is not None:
@@ -174,7 +178,7 @@ def lookup(req: LookupRequest, db: DbSession) -> LookupResponse:
             ingest_started=False,
             openreview_found=False,
             openreview_candidate=None,
-            results=search_papers(db, q, mode="specific"),
+            results=search_papers(db, q, mode="specific") if include_results else [],
         )
 
     # Kick off async ingest; the new paper will appear in /papers/{id}/status.
@@ -200,5 +204,5 @@ def lookup(req: LookupRequest, db: DbSession) -> LookupResponse:
             title=or_match.candidate.title,
             venue=or_match.candidate.venue,
         ),
-        results=search_papers(db, q, mode="specific"),
+        results=search_papers(db, q, mode="specific") if include_results else [],
     )

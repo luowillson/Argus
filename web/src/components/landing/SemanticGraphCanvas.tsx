@@ -18,6 +18,7 @@ const PALETTE = [
   "#dc7a44",
   "#2fb2a0",
 ];
+let shaderPrecisionPrototypePatched = false;
 
 type Props = {
   graph: LandingGraphDTO;
@@ -83,18 +84,19 @@ export function SemanticGraphCanvas({ graph }: Props) {
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
   const hoveredIdRef = useRef<string | null>(null);
   const [hoveredNode, setHoveredNode] = useState<LayoutNode | null>(null);
+  const [webglAvailable, setWebglAvailable] = useState(true);
   const layout = useMemo(() => createLayout(graph), [graph]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const renderer = new THREE.WebGLRenderer({
-      canvas,
-      alpha: true,
-      antialias: true,
-      powerPreference: "high-performance",
-    });
+    const renderer = createRenderer(canvas);
+    if (!renderer) {
+      setWebglAvailable(false);
+      return;
+    }
+    setWebglAvailable(true);
     renderer.setClearColor(0x000000, 0);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 
@@ -234,7 +236,6 @@ export function SemanticGraphCanvas({ graph }: Props) {
       disposeMaterial(objects.edgeLines.material);
       disposeMaterial(objects.activeLines.material);
       renderer.dispose();
-      renderer.forceContextLoss();
     };
   }, [layout]);
 
@@ -275,7 +276,9 @@ export function SemanticGraphCanvas({ graph }: Props) {
           ref={canvasRef}
           width={WIDTH}
           height={HEIGHT}
-          className="h-full w-full max-w-[1120px] cursor-pointer overflow-visible"
+          className={`h-full w-full max-w-[1120px] overflow-visible ${
+            webglAvailable ? "cursor-pointer" : "pointer-events-none opacity-0"
+          }`}
           aria-label="Semantic graph of related papers"
           onPointerMove={handlePointerMove}
           onPointerLeave={handlePointerLeave}
@@ -300,6 +303,104 @@ export function SemanticGraphCanvas({ graph }: Props) {
       </div>
     </section>
   );
+}
+
+function createRenderer(canvas: HTMLCanvasElement) {
+  const contextAttributes: WebGLContextAttributes = {
+    alpha: true,
+    antialias: true,
+    powerPreference: "high-performance",
+  };
+
+  patchShaderPrecisionFormatPrototype();
+
+  const context = canvas.getContext("webgl2", contextAttributes);
+
+  if (!context || !context.getContextAttributes()) return null;
+
+  patchShaderPrecisionFormat(context);
+
+  try {
+    return new THREE.WebGLRenderer({
+      canvas,
+      context: context as unknown as WebGLRenderingContext,
+      alpha: true,
+      antialias: true,
+      powerPreference: "high-performance",
+    });
+  } catch (error) {
+    console.warn("Semantic graph WebGL renderer could not start.", error);
+    return null;
+  }
+}
+
+function patchShaderPrecisionFormatPrototype() {
+  if (shaderPrecisionPrototypePatched) return;
+  if (typeof WebGL2RenderingContext === "undefined") return;
+
+  const prototype = WebGL2RenderingContext.prototype;
+  const originalGetShaderPrecisionFormat = prototype.getShaderPrecisionFormat;
+
+  const getShaderPrecisionFormat = function (
+    this: WebGL2RenderingContext,
+    shaderType: GLenum,
+    precisionType: GLenum,
+  ): WebGLShaderPrecisionFormat {
+    return (
+      originalGetShaderPrecisionFormat.call(this, shaderType, precisionType) ??
+      fallbackShaderPrecisionFormat(this, precisionType)
+    );
+  };
+
+  try {
+    Object.defineProperty(prototype, "getShaderPrecisionFormat", {
+      configurable: true,
+      value: getShaderPrecisionFormat,
+    });
+    shaderPrecisionPrototypePatched = true;
+  } catch {
+    // Some browsers lock native WebGL methods; the per-context patch below is
+    // still attempted before renderer startup.
+  }
+}
+
+function patchShaderPrecisionFormat(context: WebGL2RenderingContext) {
+  const originalGetShaderPrecisionFormat =
+    context.getShaderPrecisionFormat.bind(context);
+
+  const getShaderPrecisionFormat = (
+    shaderType: GLenum,
+    precisionType: GLenum,
+  ): WebGLShaderPrecisionFormat => {
+    const precision = originalGetShaderPrecisionFormat(shaderType, precisionType);
+    if (precision) return precision;
+
+    return fallbackShaderPrecisionFormat(context, precisionType);
+  };
+
+  try {
+    Object.defineProperty(context, "getShaderPrecisionFormat", {
+      configurable: true,
+      value: getShaderPrecisionFormat,
+    });
+  } catch {
+    try {
+      context.getShaderPrecisionFormat = getShaderPrecisionFormat;
+    } catch {
+      // If the context is not patchable, renderer startup will fall back safely.
+    }
+  }
+}
+
+function fallbackShaderPrecisionFormat(
+  context: WebGL2RenderingContext,
+  precisionType: GLenum,
+) {
+  return {
+    rangeMin: precisionType === context.HIGH_FLOAT ? 127 : 14,
+    rangeMax: precisionType === context.HIGH_FLOAT ? 127 : 14,
+    precision: precisionType === context.HIGH_FLOAT ? 23 : 10,
+  } as WebGLShaderPrecisionFormat;
 }
 
 function createLayout(graph: LandingGraphDTO): Layout {

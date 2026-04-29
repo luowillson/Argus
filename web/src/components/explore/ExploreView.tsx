@@ -53,7 +53,14 @@ export function ExploreView({ initialTopic }: Props) {
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
-        setError(err instanceof Error ? err.message : "Failed to build learning path");
+        const name = err instanceof Error ? err.name : "";
+        setError(
+          name === "AbortError" || name === "TimeoutError"
+            ? "Explore is taking longer than expected. Try again in a moment."
+            : err instanceof Error
+              ? err.message
+              : "Failed to build learning path",
+        );
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);

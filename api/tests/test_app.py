@@ -88,6 +88,56 @@ def test_classify_intent_topic_for_short_keyword() -> None:
     assert info["top_sim"] == 0.1
 
 
+def test_lookup_can_skip_result_payload(monkeypatch) -> None:
+    from app.routers import search as search_router
+
+    monkeypatch.setattr(
+        search_router,
+        "classify_intent",
+        lambda db, q: {"mode": "topic", "top_sim": 0.1},
+    )
+
+    def fail_search(*args, **kwargs):
+        raise AssertionError("search_papers should not run for lightweight lookup")
+
+    monkeypatch.setattr(search_router, "search_papers", fail_search)
+
+    response = search_router.lookup(
+        search_router.LookupRequest(q="transformer"),
+        object(),  # type: ignore[arg-type]
+        include_results=False,
+    )
+
+    assert response.intent == "topic"
+    assert response.paper_id is None
+    assert response.results == []
+
+
+def test_lookup_includes_result_payload_by_default(monkeypatch) -> None:
+    from app.routers import search as search_router
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        search_router,
+        "classify_intent",
+        lambda db, q: {"mode": "topic", "top_sim": 0.1},
+    )
+    monkeypatch.setattr(
+        search_router,
+        "search_papers",
+        lambda db, q, mode: calls.append((q, mode)) or [],
+    )
+
+    response = search_router.lookup(
+        search_router.LookupRequest(q="transformer"),
+        object(),  # type: ignore[arg-type]
+    )
+
+    assert response.intent == "topic"
+    assert response.results == []
+    assert calls == [("transformer", "topic")]
+
+
 def test_classify_intent_specific_for_high_similarity() -> None:
     db = _StubSimilaritySession(0.9)
     info = classify_intent(db, "transformer")  # type: ignore[arg-type]

@@ -86,6 +86,10 @@ pnpm dev
 # http://localhost:3000
 ```
 
+Open the frontend at `http://localhost:3000` during local development. The API
+also allows `http://127.0.0.1:3000` for convenience, but `localhost` is the
+canonical URL used in examples.
+
 ---
 
 ## Ingesting your first paper
@@ -291,7 +295,7 @@ EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 # Use per-developer values when connecting to the shared database.
 DEMO_USER_ID=demo-user
 DEMO_USER_EMAIL=demo@veros.local
-CORS_ORIGINS=http://localhost:3000
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 LOG_LEVEL=INFO
 ```
 

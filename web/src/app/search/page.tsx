@@ -56,12 +56,13 @@ export default async function SearchPage({
 
   let initialResults: Paper[] = [];
   let initialTotalCount = 0;
+  let initialLoadFailed = false;
   try {
     const page = await fetchSearchPage(query, PAGE_SIZE, offset, mode, activeSort);
     initialResults = page.results.map(adaptPaperOut);
     initialTotalCount = page.total;
   } catch {
-    // Server-side fetch failed; client component will retry on mount.
+    initialLoadFailed = true;
   }
   const totalPages = Math.max(1, Math.ceil(initialTotalCount / PAGE_SIZE));
 
@@ -85,6 +86,7 @@ export default async function SearchPage({
       totalPages={totalPages}
       activeSort={activeSort}
       sortLabel={SORT_LABELS[activeSort]}
+      initialLoadFailed={initialLoadFailed}
     />
   );
 }

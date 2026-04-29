@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     demo_user_id: str = "demo-user"
     demo_user_email: str = "demo@veros.local"
 
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     log_level: str = "INFO"
 
     # Comma-separated OpenReview venue ids to search when looking up a specific
