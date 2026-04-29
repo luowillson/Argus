@@ -10,10 +10,12 @@ export function PaperView({
   paper,
   aiReady,
   initialSaved = false,
+  onEnrichComplete,
 }: {
   paper: Paper;
   aiReady: boolean;
   initialSaved?: boolean;
+  onEnrichComplete?: () => void;
 }) {
   return (
     <article className="mx-auto max-w-[1100px] px-24 pt-9 pb-16">
@@ -29,7 +31,11 @@ export function PaperView({
         <ReadSkimGrid deep={paper.deep} skim={paper.skim} />
       )}
       <ReviewerVoices paper={paper} />
-      <CitationGraphSection paperId={paper.id} status={paper.citationGraphStatus} />
+      <CitationGraphSection
+        paperId={paper.id}
+        status={paper.citationGraphStatus}
+        onEnrichComplete={onEnrichComplete}
+      />
     </article>
   );
 }

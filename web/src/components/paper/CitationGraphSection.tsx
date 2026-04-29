@@ -13,13 +13,15 @@ import { cn, scoreColor } from "@/lib/utils";
 type Props = {
   paperId: string;
   status: "not_enriched" | "enriched" | "failed";
+  /** Called when citation enrichment completes so the parent can refresh paper data. */
+  onEnrichComplete?: () => void;
 };
 
 const POLL_INTERVAL_MS = 3_000;
 const MAX_POLL_ATTEMPTS = 60; // stop after ~3 minutes
 const PAGE_SIZE = 20;
 
-export function CitationGraphSection({ paperId, status }: Props) {
+export function CitationGraphSection({ paperId, status, onEnrichComplete }: Props) {
   const [localStatus, setLocalStatus] = useState(status);
   const [graph, setGraph] = useState<CitationGraphDTO | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">(status === "enriched" ? "loading" : "ready");
@@ -44,6 +46,7 @@ export function CitationGraphSection({ paperId, status }: Props) {
           if (refs.length > 0) {
             setLocalStatus("enriched");
             setMessage("");
+            onEnrichComplete?.();
             return true;
           }
         }
@@ -58,7 +61,7 @@ export function CitationGraphSection({ paperId, status }: Props) {
         return true; // stop polling on hard error
       }
     },
-    [paperId],
+    [paperId, onEnrichComplete],
   );
 
   // Initial load when paper is already enriched
@@ -131,13 +134,13 @@ export function CitationGraphSection({ paperId, status }: Props) {
   useEffect(() => { setPage(0); }, [search]);
 
   async function handleEnrich() {
-    setMessage("Queueing citation enrichment\u2026");
+    setMessage("Queueing citation enrichment…");
     setLocalStatus("not_enriched");
     setState("loading");
     pollCountRef.current = 0;
     try {
       await enrichPaperCitations(paperId);
-      setMessage("Citation enrichment queued. Waiting for worker\u2026");
+      setMessage("Citation enrichment queued. Waiting for worker…");
       setPolling(true);
     } catch {
       setMessage("Could not queue citation enrichment.");
@@ -150,7 +153,7 @@ export function CitationGraphSection({ paperId, status }: Props) {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h2 className="font-sans text-[12px] font-semibold uppercase tracking-[0.16em] text-muted">
-            Citation Graph
+            References
           </h2>
           <div className="mt-1 font-serif text-[15px] italic text-prose">
             References this paper builds on.
@@ -165,7 +168,7 @@ export function CitationGraphSection({ paperId, status }: Props) {
             polling ? "cursor-wait text-muted" : "text-burgundy hover:bg-cream",
           )}
         >
-          {polling ? "Fetching\u2026" : actionLabel}
+          {polling ? "Fetching…" : actionLabel}
         </button>
       </div>
 
@@ -178,7 +181,7 @@ export function CitationGraphSection({ paperId, status }: Props) {
         </div>
       )}
       {state === "loading" && (
-        <div className="mt-5 font-sans text-[13px] text-muted">Loading citation graph...</div>
+        <div className="mt-5 font-sans text-[13px] text-muted">Loading references...</div>
       )}
       {state === "error" && (
         <div className="mt-5 font-sans text-[13px] text-burgundy">
@@ -227,7 +230,7 @@ export function CitationGraphSection({ paperId, status }: Props) {
               {search.trim()
                 ? `${filtered.length} of ${references.length} references`
                 : `${references.length} references`}
-              {filtered.length > PAGE_SIZE && ` · showing ${pageStart + 1}\u2013${pageEnd}`}
+              {filtered.length > PAGE_SIZE && ` · showing ${pageStart + 1}–${pageEnd}`}
             </div>
           </div>
 

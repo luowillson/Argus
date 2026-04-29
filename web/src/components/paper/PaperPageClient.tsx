@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { TopNav } from "@/components/nav/TopNav";
 import { PaperPending } from "@/components/paper/PaperPending";
 import { PaperToaster } from "@/components/paper/PaperToaster";
@@ -57,6 +57,22 @@ export function PaperPageClient({ paperId }: { paperId: string }) {
     return () => controller.abort();
   }, [paperId]);
 
+  /** Re-fetch the paper detail so header stats (citations, references, etc.) update. */
+  const refreshPaper = useCallback(async () => {
+    try {
+      const result = await fetchPaper(paperId);
+      if (result.kind === "ready") {
+        setState((prev) =>
+          prev.kind === "ready"
+            ? { ...prev, paper: result.paper }
+            : prev,
+        );
+      }
+    } catch {
+      // Silently ignore — the citation section already shows the updated data.
+    }
+  }, [paperId]);
+
   return (
     <div className="min-h-screen bg-paper text-ink">
       <TopNav />
@@ -75,6 +91,7 @@ export function PaperPageClient({ paperId }: { paperId: string }) {
           paper={adaptPaperDetail(state.paper)}
           aiReady={state.paper.status === "ready"}
           initialSaved={state.saved}
+          onEnrichComplete={refreshPaper}
         />
       )}
       {state.kind === "not-found" && (
@@ -102,3 +119,4 @@ export function PaperPageClient({ paperId }: { paperId: string }) {
     </div>
   );
 }
+
