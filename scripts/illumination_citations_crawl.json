@@ -1,0 +1,38 @@
+{
+  "metadata": {
+    "seed_id": "TITLE:Scaling In-the-Wild Training for Diffusion-based Illumination Harmonization and Editing by Imposing Consistent Light Transport",
+    "crawled_at": "2026-04-29T06:33:07.639883+00:00",
+    "max_depth": -1,
+    "max_papers": -1,
+    "elapsed_seconds": 1.2
+  },
+  "stats": {
+    "total_papers": 1,
+    "total_edges": 0,
+    "max_depth_reached": 0,
+    "papers_by_depth": {
+      "0": 1
+    }
+  },
+  "papers": {
+    "26209149197d50ec8e41e1feae0184e79390e020": {
+      "paper_id": "26209149197d50ec8e41e1feae0184e79390e020",
+      "title": "Scaling In-the-Wild Training for Diffusion-based Illumination Harmonization and Editing by Imposing Consistent Light Transport",
+      "authors": [
+        "Lvmin Zhang",
+        "A. Rao",
+        "Maneesh Agrawala"
+      ],
+      "year": 2025,
+      "venue": "International Conference on Learning Representations",
+      "citation_count": 147,
+      "reference_count": 112,
+      "external_ids": {
+        "corpusid": "277677790"
+      },
+      "url": "https://www.semanticscholar.org/paper/26209149197d50ec8e41e1feae0184e79390e020",
+      "depth": 0
+    }
+  },
+  "edges": []
+}

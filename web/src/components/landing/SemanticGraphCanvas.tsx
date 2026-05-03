@@ -7,6 +7,15 @@ import type { LandingGraphDTO } from "@/lib/api";
 
 const WIDTH = 1180;
 const HEIGHT = 920;
+const BASE_CAMERA_Z = 860;
+const BASE_PITCH = -0.1;
+const MIN_ZOOM = 0.72;
+const MAX_ZOOM = 1.35;
+const DRAG_ROTATION_SPEED = 0.0052;
+const WHEEL_ZOOM_SPEED = 0.0011;
+const DRAG_CLICK_THRESHOLD = 5;
+const MIN_PITCH = -0.72;
+const MAX_PITCH = 0.62;
 const CLUSTER_COUNT = 8;
 const PALETTE = [
   "#c73737",
@@ -53,6 +62,11 @@ type Layout = {
   maxIncidentEdges: number;
 };
 
+type PointerPoint = {
+  x: number;
+  y: number;
+};
+
 type GraphSceneState = {
   layout: Layout;
   renderer: THREE.WebGLRenderer;
@@ -65,6 +79,7 @@ type GraphSceneState = {
   activeLines: THREE.LineSegments;
   activeLinePositions: Float32Array;
   raycaster: THREE.Raycaster;
+  rayHits: THREE.Intersection<THREE.Object3D>[];
   pointer: THREE.Vector2;
   dummy: THREE.Object3D;
   baseColors: THREE.Color[];
@@ -73,8 +88,32 @@ type GraphSceneState = {
   animationFrame: number;
   destroyed: boolean;
   pointerDirty: boolean;
+  transformDirty: boolean;
   visible: boolean;
   documentVisible: boolean;
+  lastFrameTime: number;
+  yaw: number;
+  targetYaw: number;
+  pitch: number;
+  targetPitch: number;
+  yawVelocity: number;
+  pitchVelocity: number;
+  idleYaw: number;
+  zoom: number;
+  targetZoom: number;
+  dragging: boolean;
+  pinching: boolean;
+  dragPointerId: number | null;
+  lastPointerX: number;
+  lastPointerY: number;
+  lastDragTime: number;
+  dragDistance: number;
+  dragMoved: boolean;
+  suppressNextClick: boolean;
+  suppressClickUntil: number;
+  activePointers: Map<number, PointerPoint>;
+  lastPinchDistance: number;
+  cursor: string;
 };
 
 export function SemanticGraphCanvas({ graph }: Props) {
@@ -102,7 +141,7 @@ export function SemanticGraphCanvas({ graph }: Props) {
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(42, WIDTH / HEIGHT, 1, 2200);
-    camera.position.set(0, 0, 860);
+    camera.position.set(0, 0, BASE_CAMERA_Z);
 
     const group = new THREE.Group();
     group.rotation.x = -0.1;
@@ -119,16 +158,42 @@ export function SemanticGraphCanvas({ graph }: Props) {
       group,
       ...objects,
       raycaster: new THREE.Raycaster(),
+      rayHits: [],
       pointer: new THREE.Vector2(),
       dummy: new THREE.Object3D(),
       hoveredId: null,
       animationFrame: 0,
       destroyed: false,
       pointerDirty: false,
+      transformDirty: false,
       visible: true,
       documentVisible:
         typeof document !== "undefined" ? !document.hidden : true,
+      lastFrameTime: 0,
+      yaw: 0,
+      targetYaw: 0,
+      pitch: BASE_PITCH,
+      targetPitch: BASE_PITCH,
+      yawVelocity: 0,
+      pitchVelocity: 0,
+      idleYaw: 0,
+      zoom: 1,
+      targetZoom: 1,
+      dragging: false,
+      pinching: false,
+      dragPointerId: null,
+      lastPointerX: 0,
+      lastPointerY: 0,
+      lastDragTime: 0,
+      dragDistance: 0,
+      dragMoved: false,
+      suppressNextClick: false,
+      suppressClickUntil: 0,
+      activePointers: new Map(),
+      lastPinchDistance: 0,
+      cursor: "grab",
     };
+    canvas.style.cursor = "grab";
     sceneStateRef.current = state;
 
     const resize = () => {
@@ -150,27 +215,31 @@ export function SemanticGraphCanvas({ graph }: Props) {
 
       state.animationFrame = window.requestAnimationFrame(render);
 
-      const time = now * 0.001;
-      group.rotation.y = time * 0.1;
-      group.rotation.x = -0.1 + Math.sin(time * 0.24) * 0.085;
-      group.rotation.z = Math.sin(time * 0.16) * 0.03;
+      const previousFrameTime = state.lastFrameTime || now;
+      const deltaSeconds = clamp((now - previousFrameTime) * 0.001, 0.001, 0.05);
+      state.lastFrameTime = now;
+
+      updateInteractionPhysics(state, deltaSeconds);
 
       const pointer = pointerRef.current;
-      if (pointer) {
+      if (pointer && !state.dragging && !state.pinching) {
         // Raycasting is expensive; only run it when the pointer actually moves
-        // or when we still have a hover to clear.
-        if (state.pointerDirty || state.hoveredId !== null) {
+        // or when the graph transform changed under a stationary pointer.
+        if (state.pointerDirty || state.transformDirty) {
           state.pointer.set(pointer.x, pointer.y);
           state.raycaster.setFromCamera(state.pointer, camera);
-          const hit = state.raycaster.intersectObject(state.hitMesh, false)[0];
+          state.rayHits.length = 0;
+          const hit = state.raycaster.intersectObject(state.hitMesh, false, state.rayHits)[0];
           const nextId =
             hit?.instanceId == null ? null : (layout.nodes[hit.instanceId]?.id ?? null);
           applyHover(state, nextId, hoveredIdRef, setHoveredNode);
+          state.rayHits.length = 0;
           state.pointerDirty = false;
         }
       } else if (state.hoveredId !== null) {
         applyHover(state, null, hoveredIdRef, setHoveredNode);
       }
+      state.transformDirty = false;
 
       renderer.render(scene, camera);
     };
@@ -245,26 +314,175 @@ export function SemanticGraphCanvas({ graph }: Props) {
     });
   }
 
-  function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    pointerRef.current = {
-      x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
-      y: -(((event.clientY - rect.top) / rect.height) * 2 - 1),
-    };
+  function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
     const state = sceneStateRef.current;
-    if (state) state.pointerDirty = true;
+    if (!state) return;
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    state.activePointers.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+    syncPointerFromEvent(event, pointerRef);
+
+    if (state.activePointers.size >= 2) {
+      state.pinching = true;
+      state.dragging = false;
+      state.dragPointerId = null;
+      state.lastPinchDistance = pointerDistance(state.activePointers);
+      suppressClick(state);
+      applyHover(state, null, hoveredIdRef, setHoveredNode);
+      setCanvasCursor(state, "grabbing");
+      return;
+    }
+
+    state.dragging = true;
+    state.dragPointerId = event.pointerId;
+    state.lastPointerX = event.clientX;
+    state.lastPointerY = event.clientY;
+    state.lastDragTime = event.timeStamp || performance.now();
+    state.dragDistance = 0;
+    state.dragMoved = false;
+    state.yawVelocity = 0;
+    state.pitchVelocity = 0;
+    applyHover(state, null, hoveredIdRef, setHoveredNode);
+    setCanvasCursor(state, "grabbing");
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
+    const state = sceneStateRef.current;
+    if (!state) return;
+
+    const activePointer = state.activePointers.get(event.pointerId);
+    if (activePointer) {
+      activePointer.x = event.clientX;
+      activePointer.y = event.clientY;
+    }
+    syncPointerFromEvent(event, pointerRef);
+
+    if (state.pinching && state.activePointers.size >= 2) {
+      const nextDistance = pointerDistance(state.activePointers);
+      if (state.lastPinchDistance > 0 && nextDistance > 0) {
+        state.targetZoom = clamp(
+          state.targetZoom * (nextDistance / state.lastPinchDistance),
+          MIN_ZOOM,
+          MAX_ZOOM,
+        );
+        state.transformDirty = true;
+      }
+      state.lastPinchDistance = nextDistance;
+      state.pointerDirty = true;
+      return;
+    }
+
+    if (state.dragging && state.dragPointerId === event.pointerId) {
+      const dx = event.clientX - state.lastPointerX;
+      const dy = event.clientY - state.lastPointerY;
+      const now = event.timeStamp || performance.now();
+      const deltaSeconds = Math.max(0.001, (now - state.lastDragTime) * 0.001);
+      const instantYawVelocity = (dx * DRAG_ROTATION_SPEED) / deltaSeconds;
+      const instantPitchVelocity = (dy * DRAG_ROTATION_SPEED) / deltaSeconds;
+
+      state.targetYaw += dx * DRAG_ROTATION_SPEED;
+      state.targetPitch = clamp(
+        state.targetPitch + dy * DRAG_ROTATION_SPEED,
+        MIN_PITCH,
+        MAX_PITCH,
+      );
+      state.yawVelocity = state.yawVelocity * 0.28 + instantYawVelocity * 0.72;
+      state.pitchVelocity = state.pitchVelocity * 0.28 + instantPitchVelocity * 0.72;
+      state.lastPointerX = event.clientX;
+      state.lastPointerY = event.clientY;
+      state.lastDragTime = now;
+      state.dragDistance += Math.hypot(dx, dy);
+      if (state.dragDistance > DRAG_CLICK_THRESHOLD) {
+        state.dragMoved = true;
+        suppressClick(state);
+      }
+      state.pointerDirty = true;
+      state.transformDirty = true;
+      return;
+    }
+
+    state.pointerDirty = true;
+  }
+
+  function handlePointerUp(event: React.PointerEvent<HTMLCanvasElement>) {
+    const state = sceneStateRef.current;
+    if (!state) return;
+
+    state.activePointers.delete(event.pointerId);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    syncPointerFromEvent(event, pointerRef);
+
+    if (state.pinching && state.activePointers.size < 2) {
+      state.pinching = false;
+      state.lastPinchDistance = 0;
+    }
+
+    if (state.dragPointerId === event.pointerId) {
+      state.dragging = false;
+      state.dragPointerId = null;
+      state.pointerDirty = true;
+      state.transformDirty = true;
+    }
+
+    if (state.activePointers.size === 0) {
+      setCanvasCursor(state, state.hoveredId ? "pointer" : "grab");
+    }
+  }
+
+  function handlePointerCancel(event: React.PointerEvent<HTMLCanvasElement>) {
+    const state = sceneStateRef.current;
+    if (!state) return;
+
+    state.activePointers.delete(event.pointerId);
+    state.dragging = false;
+    state.pinching = false;
+    state.dragPointerId = null;
+    state.lastPinchDistance = 0;
+    if (state.dragMoved) suppressClick(state);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setCanvasCursor(state, "grab");
   }
 
   function handlePointerLeave() {
     pointerRef.current = null;
     const state = sceneStateRef.current;
-    if (state) {
+    if (state && !state.dragging && !state.pinching) {
       state.pointerDirty = false;
       applyHover(state, null, hoveredIdRef, setHoveredNode);
     }
   }
 
+  function handleWheel(event: React.WheelEvent<HTMLCanvasElement>) {
+    const state = sceneStateRef.current;
+    if (!state) return;
+    event.preventDefault();
+    state.targetZoom = clamp(
+      state.targetZoom * Math.exp(-event.deltaY * WHEEL_ZOOM_SPEED),
+      MIN_ZOOM,
+      MAX_ZOOM,
+    );
+    state.transformDirty = true;
+    state.pointerDirty = true;
+  }
+
   function handleClick() {
+    const state = sceneStateRef.current;
+    if (
+      state?.suppressNextClick &&
+      (performance.now() <= state.suppressClickUntil || state.suppressClickUntil === 0)
+    ) {
+      state.suppressNextClick = false;
+      state.suppressClickUntil = 0;
+      return;
+    }
+    if (state) state.suppressNextClick = false;
     if (hoveredIdRef.current) openPaper(hoveredIdRef.current);
   }
 
@@ -276,12 +494,16 @@ export function SemanticGraphCanvas({ graph }: Props) {
           ref={canvasRef}
           width={WIDTH}
           height={HEIGHT}
-          className={`h-full w-full max-w-[1120px] overflow-visible ${
-            webglAvailable ? "cursor-pointer" : "pointer-events-none opacity-0"
+          className={`h-full w-full max-w-[1120px] touch-none overflow-visible ${
+            webglAvailable ? "cursor-grab" : "pointer-events-none opacity-0"
           }`}
           aria-label="Semantic graph of related papers"
+          onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
           onPointerLeave={handlePointerLeave}
+          onWheel={handleWheel}
           onClick={handleClick}
         />
 
@@ -501,6 +723,92 @@ function createLayout(graph: LandingGraphDTO): Layout {
     incidentEdges,
     maxIncidentEdges,
   };
+}
+
+function updateInteractionPhysics(state: GraphSceneState, deltaSeconds: number) {
+  if (!state.dragging && !state.pinching) {
+    const velocityDamping = Math.exp(-5.8 * deltaSeconds);
+    state.targetYaw += state.yawVelocity * deltaSeconds;
+    state.targetPitch = clamp(
+      state.targetPitch + state.pitchVelocity * deltaSeconds,
+      MIN_PITCH,
+      MAX_PITCH,
+    );
+    state.yawVelocity *= velocityDamping;
+    state.pitchVelocity *= velocityDamping;
+
+    if (Math.abs(state.yawVelocity) < 0.002) state.yawVelocity = 0;
+    if (Math.abs(state.pitchVelocity) < 0.002) state.pitchVelocity = 0;
+    if (state.yawVelocity === 0 && state.pitchVelocity === 0) {
+      state.idleYaw += deltaSeconds * 0.055;
+    }
+  }
+
+  const rotationEase = 1 - Math.exp(-24 * deltaSeconds);
+  const zoomEase = 1 - Math.exp(-18 * deltaSeconds);
+  const previousYaw = state.yaw;
+  const previousPitch = state.pitch;
+  const previousZoom = state.zoom;
+
+  state.yaw += (state.targetYaw - state.yaw) * rotationEase;
+  state.pitch += (state.targetPitch - state.pitch) * rotationEase;
+  state.zoom += (state.targetZoom - state.zoom) * zoomEase;
+
+  const time = state.lastFrameTime * 0.001;
+  const idlePitch = !state.dragging && !state.pinching ? Math.sin(time * 0.24) * 0.04 : 0;
+  const idleRoll = !state.dragging && !state.pinching ? Math.sin(time * 0.16) * 0.018 : 0;
+
+  state.group.rotation.y = state.idleYaw + state.yaw;
+  state.group.rotation.x = state.pitch + idlePitch;
+  state.group.rotation.z = idleRoll;
+  state.group.scale.setScalar(state.zoom);
+
+  if (
+    Math.abs(previousYaw - state.yaw) > 0.0001 ||
+    Math.abs(previousPitch - state.pitch) > 0.0001 ||
+    Math.abs(previousZoom - state.zoom) > 0.0001
+  ) {
+    state.transformDirty = true;
+  }
+}
+
+function syncPointerFromEvent(
+  event: React.PointerEvent<HTMLCanvasElement>,
+  pointerRef: React.MutableRefObject<{ x: number; y: number } | null>,
+) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  pointerRef.current = {
+    x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    y: -(((event.clientY - rect.top) / rect.height) * 2 - 1),
+  };
+}
+
+function pointerDistance(pointers: Map<number, PointerPoint>) {
+  let first: PointerPoint | null = null;
+  let second: PointerPoint | null = null;
+
+  for (const pointer of pointers.values()) {
+    if (!first) {
+      first = pointer;
+    } else {
+      second = pointer;
+      break;
+    }
+  }
+
+  if (!first || !second) return 0;
+  return Math.hypot(second.x - first.x, second.y - first.y);
+}
+
+function setCanvasCursor(state: GraphSceneState, cursor: string) {
+  if (state.cursor === cursor) return;
+  state.cursor = cursor;
+  state.renderer.domElement.style.cursor = cursor;
+}
+
+function suppressClick(state: GraphSceneState) {
+  state.suppressNextClick = true;
+  state.suppressClickUntil = performance.now() + 450;
 }
 
 function relaxLayout(
@@ -810,6 +1118,9 @@ function applyHover(
   hoveredIdRef.current = nextId;
   updateActiveEdges(state, nextId);
   setHoveredNode(nextId ? (state.layout.nodeById.get(nextId) ?? null) : null);
+  if (!state.dragging && !state.pinching) {
+    setCanvasCursor(state, nextId ? "pointer" : "grab");
+  }
 }
 
 function updateNodeInstance(state: GraphSceneState, index: number, hovered: boolean) {

@@ -156,6 +156,17 @@ uv run python scripts/fetch_openreview_venue_jsonl.py \
   --output ../data/iclr_2025_accepted_reviews.jsonl
 ```
 
+For ICLR 2026, use the same two-step flow:
+
+```bash
+cd api
+uv run python scripts/fetch_openreview_venue_jsonl.py \
+  --venue ICLR.cc/2026/Conference \
+  --decision accepted \
+  --delay 0.5 \
+  --output ../data/iclr_2026_accepted_reviews.jsonl
+```
+
 The fetcher is resumable. If it is interrupted, rerun the same command and rows
 already present in the local JSONL file will be skipped. Use `--decision all` if
 you want every submission rather than only accepted papers.
@@ -170,6 +181,18 @@ uv run python scripts/import_openreview_jsonl.py \
 The import step bulk-uploads papers and reviews, skips existing papers by
 default, and does not compute scores unless you pass `--score`. Add `--force`
 only when you want to refresh existing database rows.
+
+For hosted Supabase/Postgres, prefer a moderate chunk size and a small pause
+between transactions:
+
+```bash
+uv run python scripts/import_openreview_jsonl.py \
+  --source ../data/iclr_2026_accepted_reviews.jsonl \
+  --chunk-size 250 \
+  --chunk-delay 0.25 \
+  --score \
+  --score-delay 0.02
+```
 
 ---
 
