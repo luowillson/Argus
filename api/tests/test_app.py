@@ -42,6 +42,115 @@ def test_calculate_pagerank_uses_citation_direction() -> None:
     assert result.ranks["paper-c"] > result.ranks["paper-b"] > result.ranks["paper-a"]
 
 
+def _pathway_candidate(
+    paper_id: str,
+    *,
+    pagerank: float,
+    veros_score: float,
+    pathway_score: float,
+    year: int = 2024,
+):
+    from app.db.models import Paper, PaperGraphMetric, VerosScore
+    from app.services.pathways import _Candidate
+
+    return _Candidate(
+        paper=Paper(id=paper_id, title=paper_id, authors=[], year=year),
+        score_row=VerosScore(
+            paper_id=paper_id,
+            score=veros_score,
+            grade="A",
+            verdict="Accept",
+        ),
+        insight=None,
+        graph_metric=PaperGraphMetric(paper_id=paper_id, pagerank=pagerank),
+        relevance=0.8,
+        concept_overlap=0.4,
+        anchor_overlap=0.4,
+        accessibility=0.5,
+        prerequisite_signal=0.5,
+        pathway_score=pathway_score,
+    )
+
+
+def test_explore_topic_buckets_rank_relevant_candidates_by_pagerank(monkeypatch) -> None:
+    from app.services import pathways
+
+    stage = pathways._StageSpec(
+        stage="Foundations",
+        purpose="Build the foundations for the topic.",
+        search_query="attention mechanisms",
+        anchor_concepts=["attention"],
+    )
+    low_pagerank = _pathway_candidate(
+        "low-pagerank",
+        pagerank=0.01,
+        veros_score=9.0,
+        pathway_score=0.95,
+    )
+    high_pagerank = _pathway_candidate(
+        "high-pagerank",
+        pagerank=0.30,
+        veros_score=7.0,
+        pathway_score=0.65,
+    )
+
+    monkeypatch.setattr(
+        pathways,
+        "_build_candidate_pool",
+        lambda *args, **kwargs: [low_pagerank, high_pagerank],
+    )
+
+    buckets = pathways._pick_topic_buckets(
+        object(),  # type: ignore[arg-type]
+        stages=[stage],
+        seed_label="attention",
+        global_anchors=["attention"],
+        reference_year=None,
+        per_topic=2,
+    )
+
+    assert [candidate.paper.id for candidate in buckets[0].candidates] == [
+        "high-pagerank",
+        "low-pagerank",
+    ]
+
+
+def test_explore_fallback_ordering_uses_pagerank_as_foundation_signal() -> None:
+    from app.services import pathways
+
+    stage = pathways._StageSpec(
+        stage="Foundations",
+        purpose="Build the foundations for the topic.",
+        search_query="attention mechanisms",
+        anchor_concepts=["attention"],
+    )
+    bucket = pathways._TopicBucket(
+        stage=stage,
+        candidates=[
+            _pathway_candidate(
+                "stronger-veros",
+                pagerank=0.02,
+                veros_score=9.5,
+                pathway_score=0.95,
+            ),
+            _pathway_candidate(
+                "more-foundational",
+                pagerank=0.25,
+                veros_score=6.5,
+                pathway_score=0.60,
+            ),
+        ],
+        match_quality="strong",
+    )
+
+    ordered = pathways._fallback_ordering([bucket])
+
+    assert [item.paper_id for item in ordered.items] == [
+        "more-foundational",
+        "stronger-veros",
+    ]
+
+
 class _FakeRows:
     def fetchall(self) -> list[tuple[str]]:
         return [("paper-high",), ("paper-next",)]

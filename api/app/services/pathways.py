@@ -18,10 +18,12 @@ from app.db.models import (
     Paper,
     PaperConcept,
     PaperEdge,
+    PaperGraphMetric,
     VerosScore,
 )
 from app.schemas.paper import PaperOut
 from app.schemas.pathway import LearningPathwayOut, PathwayItem
+from app.services.graph_metrics import load_graph_metrics
 from app.services.llm.factory import make_llm_provider
 from app.services.openreview_client import build_client
 from app.services.search import build_paper_out, search_papers
@@ -154,6 +156,7 @@ class _Candidate:
     paper: Paper
     score_row: VerosScore | None
     insight: AIInsight | None
+    graph_metric: PaperGraphMetric | None
     relevance: float
     concept_overlap: float
     anchor_overlap: float
@@ -167,6 +170,21 @@ class _StagePick:
     stage: _StageSpec
     candidate: _Candidate | None
     match_quality: str  # strong | weak | missing
+
+
+def _candidate_pagerank(candidate: _Candidate) -> float:
+    if candidate.graph_metric is None:
+        return 0.0
+    return max(0.0, float(candidate.graph_metric.pagerank or 0.0))
+
+
+def _foundational_rank_key(candidate: _Candidate) -> tuple[float, float, float, int]:
+    return (
+        _candidate_pagerank(candidate),
+        candidate.pathway_score,
+        float(candidate.score_row.score) if candidate.score_row else 0.0,
+        -(candidate.paper.year or 9999),
+    )
 
 
 def _tokenize(text: str) -> list[str]:
@@ -593,6 +611,7 @@ def _build_candidate_pool(
     required_anchors: list[str] | None = None,
     exclude_paper_ids: set[str] | None = None,
     limit: int,
+    prefer_foundational_pagerank: bool = False,
 ) -> list[_Candidate]:
     seed_concepts = _concept_map(query_text)
     seed_anchors = required_anchors or _anchor_terms(seed_concepts)
@@ -626,6 +645,7 @@ def _build_candidate_pool(
     insights = {
         i.paper_id: i for i in db.exec(select(AIInsight).where(AIInsight.paper_id.in_(paper_ids))).all()
     }
+    graph_metrics = load_graph_metrics(db, paper_ids)
     cached_concepts = _load_cached_concepts(db, paper_ids)
 
     candidates: list[_Candidate] = []
@@ -667,6 +687,7 @@ def _build_candidate_pool(
                 paper=paper,
                 score_row=score_row,
                 insight=insight,
+                graph_metric=graph_metrics.get(paper_id),
                 relevance=relevance,
                 concept_overlap=overlap,
                 anchor_overlap=anchor_overlap,
@@ -676,14 +697,17 @@ def _build_candidate_pool(
             )
         )
 
-    candidates.sort(
-        key=lambda c: (
-            c.pathway_score,
-            float(c.score_row.score) if c.score_row else 0.0,
-            c.paper.year or 0,
-        ),
-        reverse=True,
-    )
+    if prefer_foundational_pagerank:
+        candidates.sort(key=_foundational_rank_key, reverse=True)
+    else:
+        candidates.sort(
+            key=lambda c: (
+                c.pathway_score,
+                float(c.score_row.score) if c.score_row else 0.0,
+                c.paper.year or 0,
+            ),
+            reverse=True,
+        )
     return candidates[:limit]
 
 
@@ -1005,6 +1029,7 @@ def build_learning_pathway_out(db: Session, pathway_id: str) -> LearningPathwayO
         i.paper_id: i
         for i in db.exec(select(AIInsight).where(AIInsight.paper_id.in_(paper_ids))).all()
     }
+    graph_metrics = load_graph_metrics(db, paper_ids)
 
     items: list[PathwayItem] = []
     for row in rows:
@@ -1012,7 +1037,12 @@ def build_learning_pathway_out(db: Session, pathway_id: str) -> LearningPathwayO
         if row.paper_id is not None:
             paper = papers.get(row.paper_id)
             if paper is not None:
-                paper_out = build_paper_out(paper, scores.get(row.paper_id), insights.get(row.paper_id))
+                paper_out = build_paper_out(
+                    paper,
+                    scores.get(row.paper_id),
+                    insights.get(row.paper_id),
+                    graph_metrics.get(row.paper_id),
+                )
         items.append(
             PathwayItem(
                 position=row.position,
@@ -1184,7 +1214,7 @@ def generate_pathway_from_topic(
 
 
 # --------------------------------------------------------------------------- #
-# Explore: topic-driven, Veros-ranked, LLM-ordered learning sequence.
+# Explore: topic-driven, PageRank-ranked learning sequence.
 # --------------------------------------------------------------------------- #
 
 _EXPLORE_PER_TOPIC = 3
@@ -1203,6 +1233,7 @@ Hard rules:
 - Keep at least 6 papers; you may drop redundant or off-topic ones.
 - Only use paper_id values that appear in the input.
 - learning_step values must be 1..N and contiguous, no duplicates.
+- Treat higher citation PageRank as more foundational after relevance filtering.
 - why_now: one short sentence on why this paper comes at this point.
 - Output ONLY JSON.
 """
@@ -1217,6 +1248,7 @@ Hard rules:
 - Only use paper_id values from the input.
 - Keep at least 6 papers unless fewer were provided.
 - learning_step values must be 1..N and contiguous, no duplicates.
+- Treat higher citation PageRank as more foundational when pagerank is present.
 - why_now: one short sentence on why this paper comes at this point.
 - Output ONLY JSON.
 """
@@ -1267,6 +1299,12 @@ def order_local_explore_candidates(
         for candidate in candidates
         if str(candidate.get("paper_id") or "").strip()
     }
+    pagerank_by_id: dict[str, float] = {}
+    for candidate in candidates:
+        paper_id = str(candidate.get("paper_id") or "").strip()
+        pagerank = candidate.get("pagerank")
+        if paper_id and isinstance(pagerank, (int, float)):
+            pagerank_by_id[paper_id] = max(0.0, float(pagerank))
     if not query:
         raise ValueError("topic must not be empty")
     if not valid_ids:
@@ -1294,7 +1332,13 @@ def order_local_explore_candidates(
     if len(cleaned) < min_items:
         raise ValueError(f"LLM returned too few valid items ({len(cleaned)})")
 
-    cleaned.sort(key=lambda item: item.learning_step)
+    if pagerank_by_id:
+        cleaned.sort(
+            key=lambda item: (pagerank_by_id.get(item.paper_id, 0.0), -item.learning_step),
+            reverse=True,
+        )
+    else:
+        cleaned.sort(key=lambda item: item.learning_step)
     contiguous = [
         item.model_copy(update={"learning_step": position})
         for position, item in enumerate(cleaned, start=1)
@@ -1335,16 +1379,13 @@ def _pick_topic_buckets(
             required_anchors=required_anchors,
             exclude_paper_ids=used_ids,
             limit=_EXPLORE_POOL_LIMIT,
+            prefer_foundational_pagerank=True,
         )
-        # Within the embedding+anchor matched pool, rank by Veros score so the
-        # user's "rank by Veros score within the topic" requirement holds.
+        # Within the text/embedding + anchor-matched pool, rank by citation
+        # PageRank first. Higher PageRank means a paper is more foundational.
         ranked = sorted(
             pool,
-            key=lambda c: (
-                float(c.score_row.score) if c.score_row else 0.0,
-                c.pathway_score,
-                c.paper.year or 0,
-            ),
+            key=_foundational_rank_key,
             reverse=True,
         )
         picked: list[_Candidate] = []
@@ -1390,6 +1431,7 @@ def _order_payload(seed_label: str, buckets: list[_TopicBucket]) -> dict[str, An
                     "stage": bucket.stage.stage,
                     "anchor_concepts": list(bucket.stage.anchor_concepts)[:4],
                     "veros_score": float(cand.score_row.score) if cand.score_row else None,
+                    "pagerank": _candidate_pagerank(cand) or None,
                     "tldr": tldr,
                 }
             )
@@ -1473,22 +1515,15 @@ def _order_papers_for_learning(
 
 
 def _fallback_ordering(buckets: list[_TopicBucket]) -> _OrderedPlanOut:
-    """Stage-order, then Veros score within stage. Used when the LLM step fails."""
-    flat: list[tuple[int, _Candidate, _StageSpec]] = []
-    for stage_index, bucket in enumerate(buckets):
-        sorted_candidates = sorted(
-            bucket.candidates,
-            key=lambda c: (
-                float(c.score_row.score) if c.score_row else 0.0,
-                c.pathway_score,
-            ),
-            reverse=True,
-        )
-        for cand in sorted_candidates:
-            flat.append((stage_index, cand, bucket.stage))
+    """PageRank-first ordering. Used when the LLM step fails."""
+    flat: list[tuple[_Candidate, _StageSpec]] = []
+    for bucket in buckets:
+        for cand in bucket.candidates:
+            flat.append((cand, bucket.stage))
+    flat.sort(key=lambda item: _foundational_rank_key(item[0]), reverse=True)
 
     items: list[_OrderedItem] = []
-    for position, (_, cand, stage) in enumerate(flat, start=1):
+    for position, (cand, stage) in enumerate(flat, start=1):
         items.append(
             _OrderedItem(
                 paper_id=cand.paper.id,
@@ -1497,9 +1532,28 @@ def _fallback_ordering(buckets: list[_TopicBucket]) -> _OrderedPlanOut:
             )
         )
     return _OrderedPlanOut(
-        rationale="Deterministic fallback ordering: stages from foundations to frontier, top Veros score within each stage.",
+        rationale="Deterministic fallback ordering: relevant papers ranked by citation PageRank, with higher PageRank treated as more foundational.",
         items=items,
     )
+
+
+def _rerank_ordering_by_pagerank(
+    ordered: _OrderedPlanOut,
+    buckets: list[_TopicBucket],
+) -> _OrderedPlanOut:
+    item_by_id = {item.paper_id: item for item in ordered.items}
+    candidates = [
+        cand
+        for bucket in buckets
+        for cand in bucket.candidates
+        if cand.paper.id in item_by_id
+    ]
+    candidates.sort(key=_foundational_rank_key, reverse=True)
+    reranked = [
+        item_by_id[cand.paper.id].model_copy(update={"learning_step": position})
+        for position, cand in enumerate(candidates, start=1)
+    ]
+    return ordered.model_copy(update={"items": reranked})
 
 
 def _build_explore_items(
@@ -1547,9 +1601,11 @@ def generate_explore_path(
 
     cached = get_cached_pathway(db, seed_paper_id=None, query_text=query, user_id=user_id)
     if cached is not None and not force:
-        out = build_learning_pathway_out(db, cached.id)
-        assert out is not None
-        return out
+        notes = dict(cached.enrichment_notes or {})
+        if notes.get("ranking_signal") == "citation_pagerank":
+            out = build_learning_pathway_out(db, cached.id)
+            assert out is not None
+            return out
 
     global_anchors = _anchor_terms(_concept_map(query))
     model: str | None = None
@@ -1576,6 +1632,8 @@ def generate_explore_path(
     ordering_source = "llm"
     try:
         ordered, order_model = _order_papers_for_learning(query, buckets)
+        ordered = _rerank_ordering_by_pagerank(ordered, buckets)
+        ordering_source = "llm_pagerank"
         if order_model:
             model = order_model
     except Exception:
@@ -1599,6 +1657,7 @@ def generate_explore_path(
         "topic_count": len(buckets),
         "paper_count": len(items),
         "ordering_source": ordering_source,
+        "ranking_signal": "citation_pagerank",
         "strong_stage_count": len(buckets) - weak_or_missing,
         "weak_or_missing_stage_count": weak_or_missing,
         "needs_enrichment": False,

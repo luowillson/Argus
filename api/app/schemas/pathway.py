@@ -36,6 +36,7 @@ class LocalExploreCandidate(BaseModel):
     stage: str
     year: int | None = None
     veros_score: float | None = None
+    pagerank: float | None = None
     tldr: str | None = None
     anchor_concepts: list[str] = []
 

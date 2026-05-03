@@ -95,6 +95,7 @@ def order_local_explore_path(req: LocalExploreOrderRequest) -> LocalExploreOrder
                     "stage": candidate.stage,
                     "year": candidate.year,
                     "veros_score": candidate.veros_score,
+                    "pagerank": candidate.pagerank,
                     "tldr": candidate.tldr,
                     "anchor_concepts": candidate.anchor_concepts,
                 }

@@ -17,7 +17,7 @@ type Props = {
 const LOADING_STEPS = [
   "Drafting sub-topics…",
   "Searching the paper corpus…",
-  "Ranking each topic by Veros score…",
+  "Ranking foundations by PageRank…",
   "Ordering the sequence for learning…",
 ];
 
@@ -91,7 +91,7 @@ export function ExploreView({ initialTopic }: Props) {
         </h1>
         <p className="mt-2 text-[15px] text-prose-soft">
           Enter a concept and Veros will draft sub-topics, search each one in the
-          corpus, rank by Veros score, and order the result for learning —
+          corpus, rank relevant papers by PageRank, and order the result for learning —
           foundations first, frontier last.
         </p>
       </div>
@@ -136,7 +136,7 @@ function LoadingState({ message }: { message: string }) {
         <span>{message}</span>
       </div>
       <p className="mt-2 text-[12px] text-muted">
-        Searching the paper corpus, then ranking matches into a learning sequence.
+        Searching the paper corpus, then ranking matches by citation PageRank.
       </p>
     </div>
   );
