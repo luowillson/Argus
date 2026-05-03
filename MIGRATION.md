@@ -561,10 +561,11 @@ We're now responsible for backups; Supabase did them automatically before.
 
 ### 5.4 Install gcloud CLI on the VM (for the `gsutil` command)
 
-In the VM SSH terminal:
+The `google-cloud-cli` package isn't in Ubuntu's default apt repos. Use
+snap, which is preinstalled on Ubuntu 24.04 GCE images:
 
 ```bash
-sudo apt install -y google-cloud-cli
+sudo snap install google-cloud-cli --classic
 ```
 
 Test it:
@@ -577,6 +578,13 @@ Should list your `argus-db-backups-*` bucket. If it complains about
 authentication, run `gcloud auth application-default login` and follow
 prompts (rare on a GCE VM — usually it just works because the VM uses its
 service account automatically).
+
+> **If snap is unavailable**, you can add Google's apt repo instead:
+> ```bash
+> echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+> curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+> sudo apt update && sudo apt install -y google-cloud-cli
+> ```
 
 ### 5.5 Create the backup script
 
