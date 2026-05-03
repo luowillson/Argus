@@ -577,13 +577,20 @@ sudo snap install google-cloud-cli --classic
 Test it:
 
 ```bash
-gsutil ls
+gcloud storage ls
 ```
 
 Should list your `argus-db-backups-*` bucket. If it complains about
 authentication, run `gcloud auth application-default login` and follow
 prompts (rare on a GCE VM — usually it just works because the VM uses its
 service account automatically).
+
+> **Why `gcloud storage` and not `gsutil`?** `gsutil` is the older Cloud
+> Storage CLI; Google now recommends `gcloud storage` for new scripts. The
+> two commands look almost identical (`cp`, `ls`, `mb`, `iam`, etc.), but
+> `gsutil` has known quirks with cached credentials on GCE VMs that produce
+> spurious "403 Provided scope(s) are not authorized" errors even when IAM
+> and OAuth scopes are correct. Stick with `gcloud storage` to avoid that.
 
 > **If snap is unavailable**, you can add Google's apt repo instead:
 > ```bash
@@ -616,7 +623,7 @@ sudo -u postgres pg_dump -Fc veros | gzip > "$LOCAL_FILE"
 echo "[$(date -Is)] Dump complete: $(du -h "$LOCAL_FILE" | cut -f1)"
 
 echo "[$(date -Is)] Uploading to $BUCKET..."
-gsutil cp "$LOCAL_FILE" "$BUCKET/"
+gcloud storage cp "$LOCAL_FILE" "$BUCKET/"
 echo "[$(date -Is)] Upload complete."
 
 echo "[$(date -Is)] Trimming local backups older than 7 days..."
