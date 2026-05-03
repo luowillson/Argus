@@ -605,18 +605,26 @@ LOCAL_FILE="$LOCAL_DIR/veros-$DATE.dump.gz"
 
 mkdir -p "$LOCAL_DIR"
 
-# Dump and gzip
+echo "[$(date -Is)] Starting pg_dump..."
 sudo -u postgres pg_dump -Fc veros | gzip > "$LOCAL_FILE"
+echo "[$(date -Is)] Dump complete: $(du -h "$LOCAL_FILE" | cut -f1)"
 
-# Upload to GCS
+echo "[$(date -Is)] Uploading to $BUCKET..."
 gsutil cp "$LOCAL_FILE" "$BUCKET/"
+echo "[$(date -Is)] Upload complete."
 
-# Trim local backups older than 7 days
+echo "[$(date -Is)] Trimming local backups older than 7 days..."
 find "$LOCAL_DIR" -name "veros-*.dump.gz" -mtime +7 -delete
+echo "[$(date -Is)] Done."
 ```
 
 Replace `YOUR-INITIALS` with whatever you used in 5.1. Save and exit (Ctrl+O,
 Enter, Ctrl+X).
+
+> **Heads up on e2-micro performance**: the first run takes 5–15 minutes for
+> a ~500 MB database because the shared vCPU exhausts its burst credits and
+> throttles to baseline. Subsequent runs are similar. This is fine for a
+> nightly cron — it just feels slow when you watch it interactively.
 
 Make it executable:
 
