@@ -136,7 +136,13 @@ Most GCP services have to be "enabled" on a project before you can use them.
 5. Scroll down. Under **Firewall**, **leave both checkboxes unchecked**
    (Allow HTTP / HTTPS). We do not want public traffic.
 
-6. Click **CREATE** at the bottom. Wait ~30 seconds for the green check
+6. Expand **Advanced options** → **Identity and API access**. Under
+   **Access scopes**, select **"Allow full access to all Cloud APIs"**.
+   This lets the VM upload backups to Cloud Storage later. Skipping this
+   step means Step 5 (backups) will fail with a 403, and fixing it
+   requires stopping and restarting the VM.
+
+7. Click **CREATE** at the bottom. Wait ~30 seconds for the green check
    next to your VM name.
 
 ✅ **How to know this worked:** in **VM instances**, `argus-db-vm` shows a
@@ -785,6 +791,12 @@ Your VM and its data are unaffected — you can fix the issue and try again.
 **Backup script fails with "permission denied" on GCS**
 - The VM's default service account doesn't have `Storage Object Admin` on
   the bucket. Re-do step 5.3.
+
+**Backup upload fails with "403 Provided scope(s) are not authorized"**
+- The VM's OAuth access scopes don't include Cloud Storage write. Stop
+  the VM, edit it, set **Access scopes** → **"Allow full access to all
+  Cloud APIs"**, restart. Tailscale IP stays the same so no `.env`
+  changes are needed afterward.
 
 **You need to start over from scratch**
 - Delete the VM (`VM instances` → checkbox → DELETE) and start from 1.5.
