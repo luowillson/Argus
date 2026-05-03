@@ -63,6 +63,9 @@ export const PaperDetailSchema = z.object({
   citations: z.number().nullable(),
   references_count: z.number().nullable(),
   citation_graph_status: CitationGraphStatusSchema,
+  pagerank: z.number().nullable().optional(),
+  citation_in_degree: z.number().nullable().optional(),
+  citation_out_degree: z.number().nullable().optional(),
   openreview_url: z.string().nullable(),
   acceptance: z.string().nullable(),
 
@@ -105,6 +108,9 @@ export const PaperOutSchema = z.object({
   citations: z.number().nullable(),
   references_count: z.number().nullable(),
   citation_graph_status: CitationGraphStatusSchema,
+  pagerank: z.number().nullable().optional(),
+  citation_in_degree: z.number().nullable().optional(),
+  citation_out_degree: z.number().nullable().optional(),
   openreview_url: z.string().nullable(),
   acceptance: z.string().nullable(),
   score: z.number().nullable(),
@@ -408,6 +414,21 @@ export const AuthorRankingSchema = z.object({
 export type AuthorRankingDTO = z.infer<typeof AuthorRankingSchema>;
 export type AuthorRankingOrder = "best" | "worst";
 
+export const PaperCitationRankingSchema = z.object({
+  paper_id: z.string(),
+  title: z.string(),
+  authors: z.string(),
+  venue: z.string().nullable(),
+  year: z.number().nullable(),
+  citations: z.number().nullable(),
+  pagerank: z.number(),
+  citation_in_degree: z.number(),
+  citation_out_degree: z.number(),
+  computed_at: z.string(),
+});
+
+export type PaperCitationRankingDTO = z.infer<typeof PaperCitationRankingSchema>;
+
 export async function fetchAuthorRankings(
   limit = 100,
   minPapers = 3,
@@ -427,6 +448,21 @@ export async function fetchAuthorRankings(
   );
   if (!res.ok) throw new Error(`Rankings API error ${res.status}`);
   return z.array(AuthorRankingSchema).parse(await res.json());
+}
+
+export async function fetchPaperCitationRankings(
+  limit = 100,
+  query = "",
+  init?: RequestInit,
+): Promise<PaperCitationRankingDTO[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (query.trim()) params.set("q", query.trim());
+  const res = await fetch(
+    `${API_BASE_URL}/rankings/papers/citations?${params}`,
+    withTimeout({ cache: "no-store", ...init }, RANKING_TIMEOUT_MS),
+  );
+  if (!res.ok) throw new Error(`Paper citation rankings API error ${res.status}`);
+  return z.array(PaperCitationRankingSchema).parse(await res.json());
 }
 
 /** Saved papers — server-backed via the demo user. */

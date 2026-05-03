@@ -30,6 +30,9 @@ class PaperDetail(BaseModel):
     citations: int | None
     references_count: int | None
     citation_graph_status: CitationGraphStatus
+    pagerank: float | None = None
+    citation_in_degree: int | None = None
+    citation_out_degree: int | None = None
     openreview_url: str | None
     acceptance: str | None
 
@@ -78,6 +81,9 @@ class PaperOut(BaseModel):
     citations: int | None
     references_count: int | None
     citation_graph_status: CitationGraphStatus
+    pagerank: float | None = None
+    citation_in_degree: int | None = None
+    citation_out_degree: int | None = None
     openreview_url: str | None
     acceptance: str | None
     score: float | None

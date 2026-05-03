@@ -2,10 +2,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import select
 
-from app.db.models import AIInsight, Paper, SavedPaper, VerosScore
+from app.db.models import Paper, SavedPaper
 from app.deps import CurrentUserDep, DbSession
 from app.schemas.paper import PaperOut
-from app.services.search import build_paper_out
+from app.services.search import build_results_for_ids
 
 router = APIRouter(prefix="/saved", tags=["saved"])
 
@@ -26,28 +26,7 @@ def list_saved(db: DbSession, user: CurrentUserDep) -> list[PaperOut]:
     if not paper_ids:
         return []
 
-    papers = {
-        p.id: p
-        for p in db.exec(select(Paper).where(Paper.id.in_(paper_ids))).all()
-    }
-    scores = {
-        s.paper_id: s
-        for s in db.exec(
-            select(VerosScore).where(VerosScore.paper_id.in_(paper_ids))
-        ).all()
-    }
-    insights = {
-        i.paper_id: i
-        for i in db.exec(
-            select(AIInsight).where(AIInsight.paper_id.in_(paper_ids))
-        ).all()
-    }
-
-    return [
-        build_paper_out(papers[pid], scores.get(pid), insights.get(pid))
-        for pid in paper_ids
-        if pid in papers
-    ]
+    return build_results_for_ids(db, paper_ids)
 
 
 @router.get("/{paper_id}", response_model=dict)

@@ -23,6 +23,9 @@ export interface Paper {
   citations: number;
   referencesCount: number | null;
   citationGraphStatus: "not_enriched" | "enriched" | "failed";
+  pagerank: number | null;
+  citationInDegree: number | null;
+  citationOutDegree: number | null;
   openreviewUrl?: string | null;
   score: number | null;
   grade: string;

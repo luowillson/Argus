@@ -68,8 +68,13 @@ export function CitationGraphSection({ paperId, status, onEnrichComplete }: Prop
   useEffect(() => {
     if (status !== "enriched") return;
     const controller = new AbortController();
-    loadGraph(controller.signal);
-    return () => controller.abort();
+    const timer = window.setTimeout(() => {
+      void loadGraph(controller.signal);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [paperId, status, loadGraph]);
 
   // Polling loop — started by handleEnrich, stopped when enrichment completes
@@ -129,9 +134,6 @@ export function CitationGraphSection({ paperId, status, onEnrichComplete }: Prop
   const pageStart = safePage * PAGE_SIZE;
   const pageEnd = Math.min(pageStart + PAGE_SIZE, filtered.length);
   const pageSlice = filtered.slice(pageStart, pageEnd);
-
-  // Reset to first page when search changes
-  useEffect(() => { setPage(0); }, [search]);
 
   async function handleEnrich() {
     setMessage("Queueing citation enrichment…");
@@ -212,7 +214,10 @@ export function CitationGraphSection({ paperId, status, onEnrichComplete }: Prop
               <input
                 type="text"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(0);
+                }}
                 placeholder="Search references…"
                 className="w-[280px] border border-rule bg-paper py-2 pl-8 pr-3 font-sans text-[13px] text-ink placeholder:text-muted-2 focus:border-burgundy focus:outline-none"
               />

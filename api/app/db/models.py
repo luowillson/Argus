@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import ARRAY, Column, DateTime, ForeignKey, Index, Numeric, String, Text
+from sqlalchemy import ARRAY, Column, DateTime, ForeignKey, Index, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -177,6 +177,24 @@ class PaperEdge(SQLModel, table=True):
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
     created_at: datetime = Field(
+        default_factory=lambda: datetime.now(),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class PaperGraphMetric(SQLModel, table=True):
+    __tablename__ = "paper_graph_metrics"
+    __table_args__ = (Index("paper_graph_metrics_pagerank_idx", "pagerank"),)
+
+    paper_id: str = Field(
+        sa_column=Column(
+            String, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+        ),
+    )
+    pagerank: float = Field(sa_column=Column(Numeric(18, 12), nullable=False))
+    in_degree: int = Field(default=0, sa_column=Column(Integer, nullable=False))
+    out_degree: int = Field(default=0, sa_column=Column(Integer, nullable=False))
+    computed_at: datetime = Field(
         default_factory=lambda: datetime.now(),
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )

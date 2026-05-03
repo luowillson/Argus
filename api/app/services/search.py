@@ -18,7 +18,7 @@ from sqlalchemy import func, text as sa_text
 from sqlmodel import Session, select
 
 from app.config import get_settings
-from app.db.models import AIInsight, Paper, VerosScore
+from app.db.models import AIInsight, Paper, PaperGraphMetric, VerosScore
 from app.schemas.paper import ConsensusStrength, PaperOut, Verdict
 from app.services.citations import citation_graph_status
 from app.services.dimensions import standardized_dimensions
@@ -296,6 +296,7 @@ def build_paper_out(
     paper: Paper,
     score_row: VerosScore | None,
     insight: AIInsight | None,
+    graph_metric: PaperGraphMetric | None = None,
 ) -> PaperOut:
     breakdown = dict(score_row.breakdown) if score_row else {}
     cs_raw = breakdown.get("consensus_strength", "split")
@@ -315,6 +316,9 @@ def build_paper_out(
         citations=paper.citations,
         references_count=paper.references_count,
         citation_graph_status=citation_graph_status(paper),
+        pagerank=float(graph_metric.pagerank) if graph_metric else None,
+        citation_in_degree=graph_metric.in_degree if graph_metric else None,
+        citation_out_degree=graph_metric.out_degree if graph_metric else None,
         openreview_url=paper.openreview_url,
         acceptance=paper.acceptance,
         score=float(score_row.score) if score_row else None,
@@ -374,9 +378,20 @@ def build_results_for_ids(db: Session, unique_ids: list[str]) -> list[PaperOut]:
             select(AIInsight).where(AIInsight.paper_id.in_(unique_ids))
         ).all()
     }
+    graph_metrics = {
+        m.paper_id: m
+        for m in db.exec(
+            select(PaperGraphMetric).where(PaperGraphMetric.paper_id.in_(unique_ids))
+        ).all()
+    }
 
     return [
-        build_paper_out(papers[pid], scores.get(pid), insights.get(pid))
+        build_paper_out(
+            papers[pid],
+            scores.get(pid),
+            insights.get(pid),
+            graph_metrics.get(pid),
+        )
         for pid in unique_ids
         if pid in papers
     ]

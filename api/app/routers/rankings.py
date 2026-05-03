@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from app.deps import DbSession
-from app.services.rankings import author_rankings
+from app.services.rankings import author_rankings, paper_citation_rankings
 
 router = APIRouter(prefix="/rankings", tags=["rankings"])
 
@@ -21,6 +21,19 @@ class AuthorRankingOut(BaseModel):
     lowest_paper_id: str | None
     lowest_paper_title: str | None
     lowest_score: float | None
+
+
+class PaperCitationRankingOut(BaseModel):
+    paper_id: str
+    title: str
+    authors: str
+    venue: str | None
+    year: int | None
+    citations: int | None
+    pagerank: float
+    citation_in_degree: int
+    citation_out_degree: int
+    computed_at: str
 
 
 @router.get("/authors", response_model=list[AuthorRankingOut])
@@ -45,4 +58,22 @@ def ranked_authors(
             order=order,
             query=q,
         )
+    ]
+
+
+@router.get("/papers/citations", response_model=list[PaperCitationRankingOut])
+def ranked_papers_by_citation_graph(
+    db: DbSession,
+    limit: int = Query(default=100, ge=1, le=500),
+    q: str = Query(default="", description="Optional title or author filter"),
+) -> list[PaperCitationRankingOut]:
+    """Rank papers by persisted citation-graph PageRank."""
+    return [
+        PaperCitationRankingOut(
+            **{
+                **ranking.__dict__,
+                "computed_at": ranking.computed_at.isoformat(),
+            }
+        )
+        for ranking in paper_citation_rankings(db, limit=limit, query=q)
     ]

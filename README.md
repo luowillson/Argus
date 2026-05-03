@@ -110,6 +110,26 @@ If the paper isn't in the database the API returns 202, the Celery worker fetche
 curl -X POST http://localhost:8000/api/v1/papers/F76bwRSLeK/ingest
 ```
 
+## Citation PageRank
+
+Citation enrichment stores reference edges in `paper_edges` with
+`edge_type='cites'`, where `src_paper_id` cites `dst_paper_id`. After running
+database migrations, compute and persist citation-graph PageRank with:
+
+```bash
+cd api
+uv run python scripts/compute_pagerank.py
+```
+
+To validate the graph without replacing stored metrics:
+
+```bash
+uv run python scripts/compute_pagerank.py --dry-run
+```
+
+Persisted metrics are exposed on paper/search payloads and through
+`GET /api/v1/rankings/papers/citations`.
+
 ## Bulk fetch papers from OpenReview
 
 Use this when you want to fetch a whole OpenReview venue. Keep the OpenReview

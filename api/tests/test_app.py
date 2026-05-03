@@ -23,6 +23,23 @@ def test_create_app_registers_core_routes() -> None:
     assert "/api/v1/search/lookup" in paths
     assert "/api/v1/search/page" in paths
     assert "/api/v1/landing/graph" in paths
+    assert "/api/v1/rankings/papers/citations" in paths
+
+
+def test_calculate_pagerank_uses_citation_direction() -> None:
+    from app.services.graph_metrics import calculate_pagerank
+
+    result = calculate_pagerank(
+        [("paper-a", "paper-b"), ("paper-a", "paper-c"), ("paper-b", "paper-c")],
+        tolerance=1e-10,
+    )
+
+    assert result.converged
+    assert result.edge_count == 3
+    assert result.in_degree == {"paper-a": 0, "paper-b": 1, "paper-c": 2}
+    assert result.out_degree == {"paper-a": 2, "paper-b": 1, "paper-c": 0}
+    assert abs(sum(result.ranks.values()) - 1.0) < 1e-9
+    assert result.ranks["paper-c"] > result.ranks["paper-b"] > result.ranks["paper-a"]
 
 
 class _FakeRows:

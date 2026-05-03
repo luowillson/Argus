@@ -11,7 +11,7 @@ from typing import cast, get_args
 
 from sqlmodel import Session, select
 
-from app.db.models import AIInsight, Paper, Review, VerosScore
+from app.db.models import AIInsight, Paper, PaperGraphMetric, Review, VerosScore
 from app.schemas.paper import PaperDetail, ReviewerVoice, Verdict
 from app.services.citations import citation_graph_status
 from app.services.dimensions import standardized_dimensions
@@ -100,6 +100,7 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
 
     score_row = db.get(VerosScore, paper_id)
     insight = db.get(AIInsight, paper_id)
+    graph_metric = db.get(PaperGraphMetric, paper_id)
     review_rows = db.exec(
         select(Review).where(Review.paper_id == paper_id).order_by(Review.created_at)
     ).all()
@@ -150,6 +151,9 @@ def build_paper_detail(db: Session, paper_id: str) -> PaperDetail | None:
         citations=paper.citations,
         references_count=paper.references_count,
         citation_graph_status=citation_graph_status(paper),
+        pagerank=float(graph_metric.pagerank) if graph_metric else None,
+        citation_in_degree=graph_metric.in_degree if graph_metric else None,
+        citation_out_degree=graph_metric.out_degree if graph_metric else None,
         openreview_url=paper.openreview_url,
         acceptance=paper.acceptance,
         score=float(score_row.score) if score_row else None,

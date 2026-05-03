@@ -26,6 +26,20 @@ class AuthorRanking:
     lowest_score: float | None
 
 
+@dataclass(frozen=True)
+class PaperCitationRanking:
+    paper_id: str
+    title: str
+    authors: str
+    venue: str | None
+    year: int | None
+    citations: int | None
+    pagerank: float
+    citation_in_degree: int
+    citation_out_degree: int
+    computed_at: datetime
+
+
 def _build_author_rankings(db: Session) -> list[AuthorRanking]:
     rows = db.execute(
         sa_text(
@@ -145,3 +159,63 @@ def author_rankings(
             )
         )
     return rankings[:limit] if limit is not None else rankings
+
+
+def paper_citation_rankings(
+    db: Session,
+    *,
+    limit: int = 100,
+    query: str = "",
+) -> list[PaperCitationRanking]:
+    normalized_query = query.strip()
+    like = f"%{normalized_query}%"
+    rows = db.execute(
+        sa_text(
+            """
+            SELECT
+              p.id AS paper_id,
+              p.title,
+              p.authors,
+              p.venue,
+              p.year,
+              p.citations,
+              m.pagerank::float AS pagerank,
+              m.in_degree,
+              m.out_degree,
+              m.computed_at
+            FROM paper_graph_metrics m
+            JOIN papers p ON p.id = m.paper_id
+            WHERE
+              :q = ''
+              OR p.title ILIKE :like
+              OR EXISTS (
+                SELECT 1
+                FROM unnest(p.authors) AS author_name
+                WHERE author_name ILIKE :like
+              )
+            ORDER BY
+              m.pagerank DESC,
+              m.in_degree DESC,
+              p.citations DESC NULLS LAST,
+              p.title ASC
+            LIMIT :limit
+            """
+        ),
+        {"q": normalized_query, "like": like, "limit": limit},
+    ).fetchall()
+
+    return [
+        PaperCitationRanking(
+            paper_id=str(row.paper_id),
+            title=str(row.title),
+            authors=", ".join(row.authors or []) or "Unknown",
+            venue=row.venue,
+            year=row.year,
+            citations=row.citations,
+            pagerank=float(row.pagerank),
+            citation_in_degree=int(row.in_degree),
+            citation_out_degree=int(row.out_degree),
+            computed_at=row.computed_at,
+        )
+        for row in rows
+    ]
